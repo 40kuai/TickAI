@@ -1,0 +1,9 @@
+data/
+*.db
+*.sqlite
+.env
+__pycache__/
+*.pyc
+.venv/
+logs/
+.trae/
