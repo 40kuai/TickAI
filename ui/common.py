@@ -8,6 +8,10 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+# Initialize logging before any hermes module imports
+from hermes.core import setup_logging  # noqa: E402
+setup_logging()
+
 from hermes.data import db  # noqa: E402
 from hermes.i18n.strings import render_language_selector, t  # noqa: E402
 from hermes.auth import require_login, logout  # noqa: E402

@@ -3,7 +3,7 @@ Authentication utilities - SQLite backed.
 """
 from __future__ import annotations
 
-import hashlib
+import bcrypt
 import uuid
 from datetime import datetime, timedelta
 from typing import Optional
@@ -18,18 +18,63 @@ _SESSION_EXPIRE_HOURS: int = 24
 
 
 def hash_password(password: str) -> str:
-    """Hash a password using SHA-256."""
-    return hashlib.sha256(password.encode()).hexdigest()
+    """Hash a password using bcrypt with automatic salt.
+
+    bcrypt provides:
+    - Automatic salt generation (no separate salt storage)
+    - Adaptive cost factor (slower = harder to brute-force)
+    - Designed specifically for password hashing
+    """
+    # bcrypt requires bytes
+    password_bytes = password.encode("utf-8")
+    # Generate salt with default work factor (12)
+    salt = bcrypt.gensalt()
+    # Hash and return as string (contains salt inside)
+    return bcrypt.hashpw(password_bytes, salt).decode("utf-8")
+
+
+def verify_password(password: str, password_hash: str) -> bool:
+    """Verify a password against its bcrypt hash."""
+    try:
+        return bcrypt.checkpw(
+            password.encode("utf-8"),
+            password_hash.encode("utf-8")
+        )
+    except (ValueError, TypeError):
+        return False
 
 
 def init_default_user() -> None:
-    """Initialize the default admin user if no users exist."""
+    """Initialize the default admin user if no users exist.
+
+    Password is read from ADMIN_INITIAL_PASSWORD environment variable.
+    If not set, generates a random password and prints it to console.
+    Never uses hardcoded default credentials.
+    """
+    import secrets
+    from hermes.config.settings import get
+
     with session_scope() as sess:
         count = sess.query(User).count()
         if count == 0:
+            # Get password from environment, or generate secure random
+            env_password = get("ADMIN_INITIAL_PASSWORD", "").strip()
+            if env_password:
+                password = env_password
+                print("[AUTH] Using admin password from ADMIN_INITIAL_PASSWORD", flush=True)
+            else:
+                # Generate a secure random password (16 chars, alphanumeric)
+                password = secrets.token_urlsafe(12)
+                print("=" * 60, flush=True)
+                print("[AUTH] ADMIN CREDENTIALS GENERATED", flush=True)
+                print(f"  Username: admin", flush=True)
+                print(f"  Password: {password}", flush=True)
+                print("  Save this password! It won't be shown again.", flush=True)
+                print("=" * 60, flush=True)
+
             default = User(
                 username="admin",
-                password_hash=hash_password("admin123"),
+                password_hash=hash_password(password),
                 is_active=True,
             )
             sess.add(default)
@@ -42,17 +87,42 @@ def get_user(username: str) -> Optional[User]:
         return sess.query(User).filter(User.username == username).first()
 
 
+def _is_sha256_hash(hash_str: str) -> bool:
+    """Check if a hash is SHA-256 format (64 hex chars)."""
+    return len(hash_str) == 64 and all(c in "0123456789abcdef" for c in hash_str.lower())
+
+
 def authenticate(username: str, password: str) -> Optional[User]:
-    """Authenticate user by username and password."""
+    """Authenticate user by username and password.
+
+    Transparently migrates SHA-256 hashes to bcrypt on first login.
+    """
     with session_scope() as sess:
         user = sess.query(User).filter(
             User.username == username,
             User.is_active.is_(True)
         ).first()
 
-        if user and user.password_hash == hash_password(password):
+        if not user:
+            return None
+
+        # Case 1: bcrypt hash (modern)
+        if user.password_hash.startswith("$2b$"):
+            if verify_password(password, user.password_hash):
+                user.last_login = datetime.utcnow()
+                return user
+            return None
+
+        # Case 2: SHA-256 hash (legacy) - verify and migrate
+        import hashlib
+        legacy_hash = hashlib.sha256(password.encode()).hexdigest()
+        if user.password_hash == legacy_hash:
+            # Migration: upgrade to bcrypt
+            user.password_hash = hash_password(password)
             user.last_login = datetime.utcnow()
+            sess.commit()
             return user
+
     return None
 
 
@@ -111,6 +181,25 @@ def cleanup_expired_sessions() -> int:
         return count
 
 
+def _set_session_param(session_id: str) -> None:
+    """Store session_id in query_params for refresh persistence."""
+    st.query_params["sid"] = session_id
+
+
+def _clear_session_param() -> None:
+    """Remove session_id from query_params."""
+    if "sid" in st.query_params:
+        del st.query_params["sid"]
+
+
+def _get_session_from_param() -> Optional[str]:
+    """Get session_id from query_params (survives page refresh)."""
+    sid = st.query_params.get("sid")
+    if sid and isinstance(sid, str) and len(sid) > 0:
+        return sid
+    return None
+
+
 def logout() -> None:
     """Log the current user out and clean up session."""
     session_id = st.session_state.get("session_id")
@@ -124,63 +213,53 @@ def logout() -> None:
                 sess.delete(session)
                 sess.commit()
 
+    _clear_session_param()
+
     for key in list(st.session_state.keys()):
         del st.session_state[key]
 
-    st.query_params.clear()
     st.rerun()
 
 
-def _preserve_session_in_url() -> None:
-    """Ensure session_id stays in URL when navigating between pages."""
-    current_session = st.session_state.get("session_id")
-    if current_session:
-        # Explicitly keep session_id in URL
-        if "session_id" not in st.query_params or st.query_params["session_id"] != current_session:
-            st.query_params.session_id = current_session
-
-
-def _get_session_id_from_url() -> Optional[str]:
-    """Get session_id from URL params."""
-    if "session_id" in st.query_params:
-        val = st.query_params["session_id"]
-        if val and isinstance(val, str) and len(val) > 0:
-            return val
-    return None
-
-
 def require_login() -> None:
-    """Require login on every page."""
+    """Require login on every page.
+
+    Session lifecycle:
+    1. st.session_state holds login state during active tab session
+    2. On page refresh, st.session_state is lost -> restore from query_params
+    3. When authenticated, always sync sid to URL for refresh persistence
+    """
     # Make sure default user exists
     init_default_user()
 
-    # Step 1: Preserve session in URL (fix nav issue)
-    _preserve_session_in_url()
-
-    # Step 2: If already authenticated, validate
+    # Step 1: If already authenticated in st.session_state, validate
     if st.session_state.get("authenticated", False):
         session_id = st.session_state.get("session_id")
         user = validate_session(session_id)
         if user:
+            # Ensure sid is in URL so refresh keeps the session
+            if st.query_params.get("sid") != session_id:
+                st.query_params["sid"] = session_id
             return
         # Session invalid, clear state
         st.session_state["authenticated"] = False
         st.session_state.pop("user", None)
         st.session_state.pop("session_id", None)
+        _clear_session_param()
 
-    # Step 3: Try to restore session from URL params
-    session_id_from_url = _get_session_id_from_url()
-    if session_id_from_url:
-        user = validate_session(session_id_from_url)
+    # Step 2: Try restore from query_params (survives refresh)
+    session_id_from_param = _get_session_from_param()
+    if session_id_from_param:
+        user = validate_session(session_id_from_param)
         if user:
             st.session_state["authenticated"] = True
             st.session_state["user"] = user.to_dict()
-            st.session_state["session_id"] = session_id_from_url
-            # Ensure URL is synced
-            st.query_params.session_id = session_id_from_url
+            st.session_state["session_id"] = session_id_from_param
             return
+        # Invalid session in param, clean up
+        _clear_session_param()
 
-    # Step 4: Not authenticated - show login form
+    # Step 3: Not authenticated - show login form
     show_login()
     st.stop()
 
@@ -218,29 +297,14 @@ def show_login() -> None:
                 st.session_state["user"] = user.to_dict()
                 st.session_state["session_id"] = session_id
                 st.session_state["login_username"] = ""
-                st.query_params.session_id = session_id
+                _set_session_param(session_id)
                 st.success(f"Welcome back, {user.username}!")
                 st.rerun()
             else:
                 st.error("Invalid username or password")
                 st.session_state["login_username"] = username
 
-        with st.expander("💡 Need to reset admin password?"):
-            if st.button("Reset Admin (admin/admin123)", use_container_width=True):
-                with session_scope() as sess:
-                    admin = sess.query(User).filter(User.username == "admin").first()
-                    if admin:
-                        admin.password_hash = hash_password("admin123")
-                        sess.commit()
-                    else:
-                        admin = User(
-                            username="admin",
-                            password_hash=hash_password("admin123"),
-                            is_active=True,
-                        )
-                        sess.add(admin)
-                        sess.commit()
-                st.success("Admin password reset! Login with admin/admin123.")
-                st.rerun()
-
-        st.caption("Default: admin / admin123")
+        st.caption(
+            "💡 First run? Check console for generated admin password. "
+            "Or set ADMIN_INITIAL_PASSWORD in .env before first startup."
+        )

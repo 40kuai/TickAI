@@ -66,11 +66,11 @@ def list_servers_handler(args: Dict[str, Any], **kwargs: Any) -> str:
                 "name": sv.name,
                 "host": sv.host,
                 "port": sv.port,
-                "user": sv.user,
+                "user": sv.username,
                 "password": "***",  # security: never expose
                 "tags": sv.tags or "",
                 "is_active": sv.is_active,
-                "last_seen": sv.last_seen.isoformat() if sv.last_seen else None,
+                "last_seen": sv.last_seen_at.isoformat() if sv.last_seen_at else None,
             })
     return tool_result(count=len(out), servers=out)
 

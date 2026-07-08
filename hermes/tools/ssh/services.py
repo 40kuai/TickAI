@@ -16,8 +16,9 @@ from typing import Any
 
 from hermes.tools.registry import registry, tool_error, tool_result
 from hermes.tools.ssh.resources import check_resources_handler, list_services_handler
-
-from . import runner as ssh_runner  # audit removed (legacy)
+from hermes.data.db import session_scope
+from hermes.data.models import Server
+from . import runner as ssh_runner
 
 
 RESOURCES_ON_SERVER_SCHEMA = {
@@ -70,10 +71,11 @@ def _get_server_or_error(server_id: Any):
     """Look up server, return (server, error_string). Exactly one is non-None."""
     if not isinstance(server_id, int):
         return None, "server_id must be an integer"
-    server = next((s for s in audit.get_servers() if s.id == server_id), None)
-    if server is None:
-        return None, f"server id={server_id} not found (use list_servers to find valid IDs)"
-    return server, None
+    with session_scope() as s:
+        server = s.query(Server).filter(Server.id == server_id).first()
+        if server is None:
+            return None, f"server id={server_id} not found (use list_servers to find valid IDs)"
+        return server, None
 
 
 def check_resources_on_server_handler(args: dict, **kwargs) -> str:

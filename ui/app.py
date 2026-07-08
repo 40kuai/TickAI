@@ -1,11 +1,14 @@
-"""Hermes — AI-Powered Operations Platform."""
+"""Hermes - AI-Powered Operations Platform."""
 import streamlit as st
+
+# Initialize logging BEFORE any hermes imports,
+# so that errors during import are captured.
+from hermes.core import setup_logging
+setup_logging()
 
 from ui.common import init_page, sidebar_status, t
 from hermes import audit
-from hermes.core import setup_logging
 
-setup_logging()
 init_page(t("home_title"), "🧠")
 sidebar_status()
 

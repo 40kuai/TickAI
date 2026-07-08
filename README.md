@@ -242,13 +242,18 @@ JSON 格式...
 
 ---
 
-## 📊 默认账号
+## 🔐 Admin Authentication
 
-| 用户名 | 密码 |
-|--------|------|
-| `admin` | `admin123` |
+On first run, if no users exist and `ADMIN_INITIAL_PASSWORD` is not set in `.env`,
+a **secure random password** will be generated and printed to the console.
 
-首次登录后请及时修改密码。
+**Set your own password before first startup:**
+```bash
+# In .env
+ADMIN_INITIAL_PASSWORD=your_secure_password_here
+```
+
+> ⚠️  Never use default credentials in production!
 
 ---
 
