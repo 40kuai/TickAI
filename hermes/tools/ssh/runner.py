@@ -15,7 +15,7 @@ from typing import Any, Optional
 from hermes.tools.ssh.disk import check_disk_handler
 
 from hermes.data.db import session_scope
-from hermes.data.models import RunRecord, Server
+from hermes.data.models import RunRecord, Server, SSHCredential
 
 
 def run_command(
@@ -34,33 +34,44 @@ def run_command(
         server = session.get(Server, server_id)
         if server is None:
             raise ValueError(f"server {server_id} not found")
+        # Use bound credential, or fall back to default
+        cred = server.ssh_credential
+        if cred is None:
+            cred = session.query(SSHCredential).filter(
+                SSHCredential.is_default == True
+            ).first()
+        if cred is None:
+            raise ValueError(
+                f"server {server_id} has no SSH credential bound and no default set"
+            )
+        host = server.host
+        cred_args = cred.to_connect_args()
 
-        result_str = check_disk_handler({
-            "host": server.host,
-            "port": server.port,
-            "username": server.username,
-            "password": server.password,
-            "command": command,
-        })
-        result = json.loads(result_str)
+    result_str = check_disk_handler({
+        "host": host,
+        "command": command,
+        **cred_args,
+    })
+    result = json.loads(result_str)
 
-        finished_at = datetime.utcnow()
-        duration_ms = int((finished_at - started_at).total_seconds() * 1000)
+    finished_at = datetime.utcnow()
+    duration_ms = int((finished_at - started_at).total_seconds() * 1000)
 
-        if "error" in result:
-            err_msg = result["error"]
-            status = "ssh_error" if err_msg.startswith("SSH error") else "failed"
-            stdout = ""
-            stderr = err_msg
-            exit_code = None
-            structured = None
-        else:
-            status = "success"
-            stdout = json.dumps(result, ensure_ascii=False)
-            stderr = ""
-            exit_code = 0
-            structured = json.dumps(result, ensure_ascii=False)
+    if "error" in result:
+        err_msg = result["error"]
+        status = "ssh_error" if err_msg.startswith("SSH error") else "failed"
+        stdout = ""
+        stderr = err_msg
+        exit_code = None
+        structured = None
+    else:
+        status = "success"
+        stdout = json.dumps(result, ensure_ascii=False)
+        stderr = ""
+        exit_code = 0
+        structured = json.dumps(result, ensure_ascii=False)
 
+    with session_scope() as session:
         run = RunRecord(
             server_id=server_id,
             command=command,
@@ -81,15 +92,17 @@ def run_command(
         )
         session.add(run)
 
-        if status == "success":
-            server.last_seen_at = finished_at
+        if status == "success" and server_id is not None:
+            server = session.get(Server, server_id)
+            if server is not None:
+                server.last_seen_at = finished_at
 
         session.flush()
         return run
 
 
 def persist_tool_run(
-    server_id: int,
+    server_id: Optional[int],
     command_label: str,
     result_json: str,
     triggered_by: str,

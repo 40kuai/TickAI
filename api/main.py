@@ -21,6 +21,7 @@ from .auth_routes import router as auth_router
 from .chat_routes import router as chat_router
 from .history_routes import router as history_router
 from .server_routes import router as server_router
+from .ssh_credential_routes import router as ssh_cred_router
 from .tool_routes import router as tool_router
 
 app = FastAPI(title="TickAI API", version="1.0.0")
@@ -41,6 +42,7 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 app.include_router(auth_router)
 app.include_router(server_router)
+app.include_router(ssh_cred_router)
 app.include_router(chat_router)
 app.include_router(tool_router)
 app.include_router(history_router)

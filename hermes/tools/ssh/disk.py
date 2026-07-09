@@ -120,25 +120,43 @@ def _close_ssh(client: paramiko.SSHClient) -> None:
 def check_disk_handler(args: Dict[str, Any], **kwargs: Any) -> str:
     """Check disk usage on a remote server via SSH. Read-only on the remote.
 
-    Required: host, username, password
-    Optional: port (default 22), command (default "df -Th")
+    Primary mode: pass server_id (from list_servers) - credentials auto-resolved
+    from the bound SSH credential. No password/key needed.
+
+    Fallback mode: pass host + username + password/key_content explicitly.
 
     Returns JSON with `mounts` (sorted by use_pct desc) and `summary`.
     """
-    # ---- 4.1 Argument validation (BEFORE any network call) ----
+    # ---- 4.1 Server_id mode (preferred) ----
+    server_id = args.get("server_id")
+    if server_id is not None:
+        from hermes.tools.ssh import get_server_ssh_args
+        try:
+            host, cred_args, _ = get_server_ssh_args(int(server_id))
+        except (ValueError, TypeError) as exc:
+            return tool_error(str(exc))
+        # Merge host with credential args
+        args = {"host": host, **cred_args, "command": args.get("command", "df -Th")}
+
+    # ---- 4.2 Argument validation (BEFORE any network call) ----
     host = args.get("host", "")
     if not isinstance(host, str) or not host.strip():
-        return tool_error("host is required")
+        return tool_error("host is required (or provide server_id)")
     host = host.strip()
 
     username = args.get("username", "")
     if not isinstance(username, str) or not username.strip():
-        return tool_error("username is required")
+        return tool_error("username is required (or provide server_id)")
     username = username.strip()
 
     password = args.get("password", "")
-    if not isinstance(password, str) or not password:
-        return tool_error("password is required")
+    if not isinstance(password, str):
+        password = ""
+    key_content = args.get("key_content", "")
+    if not isinstance(key_content, str):
+        key_content = ""
+    if not password and not key_content:
+        return tool_error("password or key_content is required (or provide server_id)")
 
     port_raw = args.get("port", 22)
     try:
@@ -161,15 +179,42 @@ def check_disk_handler(args: Dict[str, Any], **kwargs: Any) -> str:
     # ---- 4.3 Connect, run, parse — ALWAYS close in finally ----
     client = _create_ssh_client()
     try:
-        client.connect(
-            hostname=host,
-            port=port,
-            username=username,
-            password=password,
-            timeout=10,
-            allow_agent=False,    # don't use the local ssh-agent
-            look_for_keys=False,  # don't try ~/.ssh/id_* — password only
-        )
+        if key_content:
+            import io
+            try:
+                from paramiko import RSAKey, Ed25519Key, ECDSAKey
+                key_file = io.StringIO(key_content)
+                pkey = None
+                for KeyClass in [RSAKey, Ed25519Key, ECDSAKey]:
+                    try:
+                        pkey = KeyClass.from_private_key(key_file)
+                        break
+                    except Exception:
+                        key_file.seek(0)
+                        continue
+                if pkey is None:
+                    return tool_error("invalid SSH key content")
+                client.connect(
+                    hostname=host,
+                    port=port,
+                    username=username,
+                    pkey=pkey,
+                    timeout=10,
+                    allow_agent=False,
+                    look_for_keys=False,
+                )
+            except Exception as exc:
+                return tool_error(f"SSH key error: {exc}")
+        else:
+            client.connect(
+                hostname=host,
+                port=port,
+                username=username,
+                password=password,
+                timeout=10,
+                allow_agent=False,    # don't use the local ssh-agent
+                look_for_keys=False,  # don't try ~/.ssh/id_* - password only
+            )
         # SFTP subsystem is intentionally NEVER opened
         stdin, stdout, stderr = client.exec_command(command, timeout=10)
         output_bytes = stdout.read()
@@ -202,51 +247,54 @@ def check_disk_handler(args: Dict[str, Any], **kwargs: Any) -> str:
 DISK_SCHEMA = {
     "name": "check_disk_usage",
     "description": (
-        "Check disk usage on a remote Linux server via SSH (password auth). "
-        "Connects, runs `df -Th` (read-only), parses the output into structured "
-        "data, and returns mount points sorted by usage percent. The remote "
-        "server is left completely untouched — no files written, no processes "
-        "left behind, connection always closed.\n\n"
-        "Use when the user wants to check disk space on a server.\n\n"
+        "Check disk usage on a remote Linux server via SSH. Read-only.\n\n"
+        "PREFERRED: Pass server_id from list_servers. Credentials are auto-resolved "
+        "from the server's bound SSH credential - no password or key needed.\n\n"
+        "FALLBACK: Pass host + username + password (or key_content) explicitly.\n\n"
+        "Runs `df -Th`, parses output into structured data, returns mount points "
+        "sorted by usage percent. The remote server is left completely untouched.\n\n"
         "Examples:\n"
-        "  check_disk_usage(host='1.2.3.4', username='root', password='s3cret')\n"
-        "  check_disk_usage(host='srv.local', username='admin', password='pw', port=2222)\n"
+        "  check_disk_usage(server_id=1)\n"
+        "  check_disk_usage(server_id=3, command='df -h')\n"
     ),
     "parameters": {
         "type": "object",
         "properties": {
+            "server_id": {
+                "type": "integer",
+                "description": (
+                    "Server ID from list_servers. PREFERRED method - "
+                    "credentials auto-resolved from bound SSH credential."
+                ),
+            },
             "host": {
                 "type": "string",
-                "description": "Hostname or IP address of the SSH server.",
+                "description": "Hostname or IP. Only needed if server_id not provided.",
             },
             "username": {
                 "type": "string",
-                "description": "SSH username.",
+                "description": "SSH username. Only needed if server_id not provided.",
             },
             "password": {
                 "type": "string",
-                "description": (
-                    "SSH password. Passed in plaintext to the LLM — use only on "
-                    "trusted, local-network machines for this demo."
-                ),
+                "description": "SSH password. Only needed if server_id not provided.",
+            },
+            "key_content": {
+                "type": "string",
+                "description": "PEM private key content. Alternative to password.",
             },
             "port": {
                 "type": "integer",
                 "description": "SSH port. Default 22.",
                 "default": 22,
-                "minimum": 1,
-                "maximum": 65535,
             },
             "command": {
                 "type": "string",
-                "description": (
-                    "Command to run on the remote. Hardcoded allowlist: only "
-                    "'df -Th', 'df -h', 'df' are accepted."
-                ),
+                "description": "df command variant: 'df -Th', 'df -h', or 'df'.",
                 "default": "df -Th",
             },
         },
-        "required": ["host", "username", "password"],
+        "required": [],
     },
 }
 

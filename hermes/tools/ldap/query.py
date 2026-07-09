@@ -1,9 +1,14 @@
-"""LDAP Tool — read-only user information queries.
+"""LDAP Tool - STRICTLY READ-ONLY user information queries.
+
+SECURITY: This tool only performs LDAP search operations. It does NOT
+support any modification operations (add/modify/delete/rename/password reset).
+The connection is used exclusively for conn.search() calls.
 
 Handler registered:
-  - ldap_search_user  → search user by username/email/uid
+  - ldap_search_user  -> search user by username/email/uid
 """
 from typing import Any, Dict, List, Optional
+from datetime import datetime, timedelta, timezone
 
 from hermes.tools.registry import registry, tool_error, tool_result
 from hermes.config import (
@@ -17,12 +22,71 @@ from hermes.config import (
 )
 
 
+# Windows file time epoch: 1601-01-01 UTC
+_WIN_EPOCH = datetime(1601, 1, 1, tzinfo=timezone.utc)
+_WIN_MAX = 9223372036854775807  # 0x7FFFFFFFFFFFFFFF -> never expires
+
+# userAccountControl bit flags
+_UAC_DISABLED = 0x00000002
+_UAC_LOCKED = 0x00000010
+_UAC_PW_EXPIRED = 0x00800000
+
+
+def _parse_win_time(val) -> Optional[str]:
+    """Convert Windows file time to ISO string. None/Never -> '永不过期'."""
+    if val is None:
+        return None
+    try:
+        n = int(val)
+    except (TypeError, ValueError):
+        return None
+    if n == 0 or n >= _WIN_MAX:
+        return "永不过期"
+    dt = _WIN_EPOCH + timedelta(microseconds=n / 10)
+    return dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+def _parse_lockout(val) -> Optional[str]:
+    """0 -> not locked, non-zero -> locked (with timestamp)."""
+    if val is None:
+        return None
+    try:
+        n = int(val)
+    except (TypeError, ValueError):
+        return None
+    if n == 0:
+        return "未锁定"
+    dt = _WIN_EPOCH + timedelta(microseconds=n / 10)
+    return f"已锁定 (锁定时间: {dt.strftime('%Y-%m-%d %H:%M:%S UTC')})"
+
+
+def _parse_uac(val) -> dict:
+    """Parse userAccountControl flags."""
+    if val is None:
+        return {}
+    try:
+        flags = int(val)
+    except (TypeError, ValueError):
+        return {}
+    return {
+        "disabled": bool(flags & _UAC_DISABLED),
+        "locked": bool(flags & _UAC_LOCKED),
+        "password_expired": bool(flags & _UAC_PW_EXPIRED),
+    }
+
+
 LDAP_SEARCH_USER_SCHEMA = {
     "name": "ldap_search_user",
     "description": (
-        "Search for user information in LDAP directory. Strictly read-only query.\n\n"
-        "Supports searching by username, email, or UID. Returns a list of matching "
-        "user entries with common attributes: cn, uid, mail, department, title, etc.\n\n"
+        "Search for user information in LDAP directory. STRICTLY READ-ONLY.\n\n"
+        "This tool ONLY performs search queries. It cannot modify, create, "
+        "delete, lock/unlock, or reset any LDAP entries.\n\n"
+        "Supports searching by username, email, or UID. Returns user entries "
+        "with attributes: cn, uid, mail, department, title, phone, and account "
+        "status (expiration, lockout, disabled, password expired, last logon).\n\n"
+        "IMPORTANT: When presenting results, report the data exactly as returned. "
+        "Do NOT calculate or estimate relative time (e.g. '2 months until expiry'). "
+        "Only state the factual timestamp.\n\n"
         "Usage examples:\n"
         "  - Search by username: {\"search_type\": \"username\", \"search_value\": \"john\"}\n"
         "  - Search by email: {\"search_type\": \"email\", \"search_value\": \"john@example.com\"}\n"
@@ -89,6 +153,7 @@ def ldap_search_user_handler(args: Dict[str, Any], **kwargs: Any) -> str:
         from ldap3 import Server, Connection, SUBTREE
 
         ldap_server = Server(server, port=port, use_ssl=use_ssl, get_info=False)
+        # READ-ONLY: connection is used exclusively for search, never modify
         with Connection(ldap_server, bind_dn, bind_password, auto_bind=True) as conn:
             escaped_value = _escape_ldap_filter(search_value)
             filter_map = {
@@ -97,11 +162,21 @@ def ldap_search_user_handler(args: Dict[str, Any], **kwargs: Any) -> str:
                 "uid": f"(uid=*{escaped_value}*)",
             }
             search_filter = filter_map[search_type]
-            attributes = ["cn", "uid", "mail", "department", "title", "telephoneNumber", "mobile", "manager", "description"]
+            attributes = [
+                "cn", "uid", "mail", "department", "title",
+                "telephoneNumber", "mobile", "manager", "description",
+                # Account status
+                "userAccountControl", "accountExpires", "lockoutTime",
+                "pwdLastSet", "badPwdCount", "lastLogon",
+            ]
             conn.search(search_base, search_filter, search_scope=SUBTREE, attributes=attributes)
 
             results = []
             for entry in conn.entries:
+                # Parse account control flags
+                uac_raw = entry.userAccountControl.value if entry.userAccountControl else None
+                uac_info = _parse_uac(uac_raw)
+
                 user_data = {
                     "dn": str(entry.entry_dn),
                     "cn": entry.cn.value if entry.cn else None,
@@ -113,6 +188,15 @@ def ldap_search_user_handler(args: Dict[str, Any], **kwargs: Any) -> str:
                     "mobile": entry.mobile.value if entry.mobile else None,
                     "manager": entry.manager.value if entry.manager else None,
                     "description": entry.description.value if entry.description else None,
+                    # Account status
+                    "account_expires": _parse_win_time(entry.accountExpires.value if entry.accountExpires else None),
+                    "lockout_status": _parse_lockout(entry.lockoutTime.value if entry.lockoutTime else None),
+                    "account_disabled": uac_info.get("disabled", None),
+                    "account_locked": uac_info.get("locked", None),
+                    "password_expired": uac_info.get("password_expired", None),
+                    "password_last_set": _parse_win_time(entry.pwdLastSet.value if entry.pwdLastSet else None),
+                    "bad_password_count": entry.badPwdCount.value if entry.badPwdCount else None,
+                    "last_logon": _parse_win_time(entry.lastLogon.value if entry.lastLogon else None),
                 }
                 results.append(user_data)
 

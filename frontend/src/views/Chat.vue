@@ -64,16 +64,42 @@ async function selectConversation(id) {
   }
 }
 
-// 规整消息结构
+// 规整消息结构 - 将 tool 角色的结果配对到对应的工具调用
 function normalizeMessages(list) {
+  // Build a map of tool_call_id -> tool result from tool-role messages
+  const toolResults = {}
+  for (const m of list) {
+    if (m.role === 'tool' && m.tool_call_id) {
+      let preview = m.content || ''
+      try {
+        const parsed = JSON.parse(preview)
+        if (parsed.error) preview = parsed.error
+        else if (parsed.users) preview = `找到 ${parsed.users.length} 条记录`
+        else if (parsed.count !== undefined) preview = `共 ${parsed.count} 条`
+        else preview = preview.substring(0, 200)
+      } catch { /* keep raw */ }
+      toolResults[m.tool_call_id] = preview.substring(0, 200)
+    }
+  }
+
   return list
     .filter((m) => m.role !== 'system' && m.role !== 'tool')
-    .map((m) => ({
-      role: m.role === 'assistant' ? 'assistant' : 'user',
-      content: m.content || '',
-      tool_calls: extractToolCalls(m),
-      streaming: false,
-    }))
+    .map((m) => {
+      const toolCalls = extractToolCalls(m)
+      // Attach tool results from tool-role messages
+      for (const tc of toolCalls) {
+        if (tc.id && toolResults[tc.id]) {
+          tc.result = toolResults[tc.id]
+          tc.elapsed_ms = null
+        }
+      }
+      return {
+        role: m.role === 'assistant' ? 'assistant' : 'user',
+        content: m.content || '',
+        tool_calls: toolCalls,
+        streaming: false,
+      }
+    })
 }
 
 // 提取工具调用信息
@@ -217,7 +243,7 @@ async function sendMessage() {
 function handleSSEEvent(evt, aiMsg) {
   switch (evt.type) {
     case 'round_start':
-      if (!aiMsg.content) aiMsg.status = '正在思考…'
+      aiMsg.status = '正在思考…'
       break
     case 'chunk':
       aiMsg.content += evt.content || ''
@@ -241,7 +267,7 @@ function handleSSEEvent(evt, aiMsg) {
           tc.elapsed_ms = evt.elapsed_ms
         }
         const stillRunning = aiMsg.tool_calls.some((t) => t.running)
-        if (!stillRunning && !aiMsg.content) {
+        if (!stillRunning) {
           aiMsg.status = '正在整理结果…'
         }
       }
@@ -291,9 +317,14 @@ function formatTime(t) {
   }
 }
 
-// 回车发送
+// IME 组合输入状态
+const isComposing = ref(false)
+
+// 回车发送（排除 IME 组合输入）
 function onEnter(e) {
   if (e.shiftKey) return
+  // 中文输入法组合输入中不触发发送
+  if (e.isComposing || isComposing.value) return
   e.preventDefault()
   sendMessage()
 }
@@ -329,7 +360,6 @@ onMounted(loadConversations)
             <div class="conv-item-meta">{{ formatTime(c.updated_at) }}</div>
           </div>
           <div class="conv-item-side">
-            <span v-if="c.total_runs" class="badge badge-gray">{{ c.total_runs }}</span>
             <button class="del-btn" title="删除" @click="deleteConversation(c.id, $event)">×</button>
           </div>
         </a>
@@ -391,7 +421,7 @@ onMounted(loadConversations)
                 <div v-else class="msg-markdown" v-html="renderMarkdown(m.content)"></div>
               </div>
               <!-- 等待状态提示 -->
-              <div v-if="m.streaming && m.status && !m.content" class="msg-bubble bubble-ai status-bubble">
+              <div v-if="m.streaming && m.status" class="msg-bubble bubble-ai status-bubble">
                 <span class="status-icon">
                   <span class="dot"></span><span class="dot"></span><span class="dot"></span>
                 </span>
@@ -410,6 +440,8 @@ onMounted(loadConversations)
           placeholder="输入消息，Enter 发送，Shift+Enter 换行"
           rows="2"
           @keydown.enter="onEnter"
+          @compositionstart="isComposing = true"
+          @compositionend="isComposing = false"
         ></textarea>
         <button class="btn btn-primary send-btn" :disabled="sending || !inputMsg.trim()" @click="sendMessage">
           {{ sending ? '发送中…' : '发送' }}

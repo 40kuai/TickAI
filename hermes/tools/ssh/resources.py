@@ -71,12 +71,14 @@ RESOURCES_SCHEMA = {
         "properties": {
             "host": {"type": "string", "description": "Server IP or hostname."},
             "username": {"type": "string", "description": "SSH username."},
-            "password": {"type": "string", "description": "SSH password."},
+            "password": {"type": "string", "description": "SSH password (plaintext - demo only). Either password or key_content required."},
+            "key_content": {"type": "string", "description": "PEM-encoded SSH private key content for key-based auth. Either password or key_content required."},
             "port": {"type": "integer", "default": 22, "minimum": 1, "maximum": 65535},
         },
-        "required": ["host", "username", "password"],
+        "required": ["host", "username"],
     },
 }
+
 
 SERVICES_SCHEMA = {
     "name": "list_services",
@@ -97,10 +99,11 @@ SERVICES_SCHEMA = {
         "properties": {
             "host": {"type": "string", "description": "Server IP or hostname."},
             "username": {"type": "string", "description": "SSH username."},
-            "password": {"type": "string", "description": "SSH password."},
+            "password": {"type": "string", "description": "SSH password (plaintext - demo only). Either password or key_content required."},
+            "key_content": {"type": "string", "description": "PEM-encoded SSH private key content for key-based auth. Either password or key_content required."},
             "port": {"type": "integer", "default": 22, "minimum": 1, "maximum": 65535},
         },
-        "required": ["host", "username", "password"],
+        "required": ["host", "username"],
     },
 }
 
@@ -109,19 +112,43 @@ SERVICES_SCHEMA = {
 # Connection helpers (same shape as tools/disk.py)
 # ============================================================
 
-def _create_ssh_client(host: str, port: int, username: str, password: str) -> paramiko.SSHClient:
+def _create_ssh_client(host: str, port: int, username: str, password: str = "", key_content: str = "") -> paramiko.SSHClient:
     """Create a connected SSHClient. Caller is responsible for .close()."""
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    client.connect(
-        hostname=host,
-        port=port,
-        username=username,
-        password=password,
-        timeout=10,
-        look_for_keys=False,
-        allow_agent=False,
-    )
+    if key_content:
+        import io
+        from paramiko import RSAKey, Ed25519Key, ECDSAKey
+        key_file = io.StringIO(key_content)
+        pkey = None
+        for KeyClass in [RSAKey, Ed25519Key, ECDSAKey]:
+            try:
+                pkey = KeyClass.from_private_key(key_file)
+                break
+            except Exception:
+                key_file.seek(0)
+                continue
+        if pkey is None:
+            raise ValueError("invalid SSH key content")
+        client.connect(
+            hostname=host,
+            port=port,
+            username=username,
+            pkey=pkey,
+            timeout=10,
+            look_for_keys=False,
+            allow_agent=False,
+        )
+    else:
+        client.connect(
+            hostname=host,
+            port=port,
+            username=username,
+            password=password,
+            timeout=10,
+            look_for_keys=False,
+            allow_agent=False,
+        )
     return client
 
 
@@ -141,8 +168,8 @@ def _validate_conn_args(args: dict) -> Optional[str]:
         return "host is required"
     if not args.get("username"):
         return "username is required"
-    if not args.get("password"):
-        return "password is required"
+    if not args.get("password") and not args.get("key_content"):
+        return "password or key_content is required"
     port = args.get("port", 22)
     try:
         port = int(port)
@@ -292,11 +319,12 @@ def check_resources_handler(args: dict, **kwargs) -> str:
     host = args["host"]
     port = int(args.get("port", 22))
     username = args["username"]
-    password = args["password"]
+    password = args.get("password", "")
+    key_content = args.get("key_content", "")
 
     client = None
     try:
-        client = _create_ssh_client(host, port, username, password)
+        client = _create_ssh_client(host, port, username, password, key_content)
         stdin, stdout, stderr = client.exec_command(RESOURCES_CMD, timeout=10)
         exit_code = stdout.channel.recv_exit_status()
         if exit_code != 0:
@@ -369,11 +397,12 @@ def list_services_handler(args: dict, **kwargs) -> str:
     host = args["host"]
     port = int(args.get("port", 22))
     username = args["username"]
-    password = args["password"]
+    password = args.get("password", "")
+    key_content = args.get("key_content", "")
 
     client = None
     try:
-        client = _create_ssh_client(host, port, username, password)
+        client = _create_ssh_client(host, port, username, password, key_content)
         stdin, stdout, stderr = client.exec_command(SERVICES_CMD, timeout=10)
         exit_code = stdout.channel.recv_exit_status()
         if exit_code != 0:

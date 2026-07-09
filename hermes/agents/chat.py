@@ -161,14 +161,29 @@ def chat(
                 "elapsed_ms": elapsed_ms,
                 "result_preview": _truncate_for_log(result, 200),
             })
-            if name == "check_disk_on_server":
+            if name in ("check_disk_usage", "check_resources_on_server", "list_services_on_server"):
                 extra_runs += 1
+
+            # Persist to history (skip tools that persist internally)
+            if name not in ("check_resources_on_server", "list_services_on_server"):
+                try:
+                    from hermes.tools.ssh.runner import persist_tool_run
+                    persist_tool_run(
+                        server_id=args.get("server_id") if isinstance(args.get("server_id"), int) else None,
+                        command_label=name,
+                        result_json=result,
+                        triggered_by="llm_tool_call",
+                    )
+                except Exception:
+                    pass
 
             messages.append({
                 "role": "tool",
                 "tool_call_id": tc_id,
                 "content": result,
             })
+            # Save immediately after tool execution (don't lose results on interrupt)
+            _save_messages(current_conv_id, messages)
 
     # Hit max rounds without a text answer
     fallback = "(max tool rounds reached)"
@@ -326,8 +341,21 @@ def chat_stream(
                 "elapsed_ms": elapsed_ms,
                 "result_preview": result_preview,
             })
-            if name == "check_disk_on_server":
+            if name in ("check_disk_usage", "check_resources_on_server", "list_services_on_server"):
                 extra_runs += 1
+
+            # Persist to history (skip tools that persist internally)
+            if name not in ("check_resources_on_server", "list_services_on_server"):
+                try:
+                    from hermes.tools.ssh.runner import persist_tool_run
+                    persist_tool_run(
+                        server_id=args.get("server_id") if isinstance(args.get("server_id"), int) else None,
+                        command_label=name,
+                        result_json=result,
+                        triggered_by="llm_tool_call",
+                    )
+                except Exception:
+                    pass
 
             yield {
                 "type": "tool_call_end",
@@ -341,6 +369,8 @@ def chat_stream(
                 "tool_call_id": tc_id,
                 "content": result,
             })
+            # Save immediately after tool execution
+            _save_messages(current_conv_id, messages)
 
     # Hit max rounds without a text answer
     fallback = "(max tool rounds reached)"

@@ -19,7 +19,7 @@ LIST_SERVERS_SCHEMA = {
     "description": (
         "List all registered servers. Optionally filter by tag, name, or active status. "
         "Returns a JSON object with `servers` (array) and `count` (int). "
-        "Passwords are masked — never visible to the LLM."
+        "SSH credentials are referenced by ssh_credential_id - never exposed to the LLM."
     ),
     "parameters": {
         "type": "object",
@@ -65,11 +65,10 @@ def list_servers_handler(args: Dict[str, Any], **kwargs: Any) -> str:
                 "id": sv.id,
                 "name": sv.name,
                 "host": sv.host,
-                "port": sv.port,
-                "user": sv.username,
-                "password": "***",  # security: never expose
-                "tags": sv.tags or "",
+                "tags": [t.strip() for t in (sv.tags or "").split(",") if t.strip()],
                 "is_active": sv.is_active,
+                "ssh_credential_id": sv.ssh_credential_id,
+                "ssh_credential_name": sv.ssh_credential.name if sv.ssh_credential else None,
                 "last_seen": sv.last_seen_at.isoformat() if sv.last_seen_at else None,
             })
     return tool_result(count=len(out), servers=out)
@@ -153,7 +152,7 @@ def query_runs_handler(args: Dict[str, Any], **kwargs: Any) -> str:
         runs = q.order_by(RunRecord.started_at.desc()).limit(limit).all()
         out = []
         for r in runs:
-            sv = s.get(Server, r.server_id)
+            sv = s.get(Server, r.server_id) if r.server_id else None
             out.append({
                 "id": r.id,
                 "server_id": r.server_id,

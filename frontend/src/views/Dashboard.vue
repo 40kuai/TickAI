@@ -138,12 +138,12 @@ onMounted(loadData)
           </thead>
           <tbody>
             <tr v-for="(r, i) in runs" :key="r.id ?? i">
-              <td>{{ formatTime(r.created_at || r.started_at || r.timestamp) }}</td>
-              <td>{{ r.server_name || r.server || '-' }}</td>
+              <td>{{ formatTime(r.started_at) }}</td>
+              <td>{{ r.server_name || '-' }}</td>
               <td>
                 <span class="badge" :class="statusBadge(r.status)">{{ r.status || '-' }}</span>
               </td>
-              <td class="col-content">{{ r.query || r.message || r.task || '-' }}</td>
+              <td class="col-content">{{ r.command || '-' }}</td>
             </tr>
           </tbody>
         </table>
