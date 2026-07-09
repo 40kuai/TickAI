@@ -67,6 +67,54 @@ class TokenHubClient:
                 print(f"[LLM ERROR] ({elapsed_ms}ms) {exc}", flush=True)
             raise
 
+    def chat_stream(self, messages, tools=None):
+        """Streaming chat completion. Yields delta dicts from each SSE chunk.
+
+        Each yielded delta may contain:
+          - {"content": "..."} for incremental text fragments
+          - {"tool_calls": [...]} for incremental tool-call fragments
+        The stream ends when the server sends ``[DONE]``.
+        """
+        payload = {"model": self.model, "messages": messages, "stream": True}
+        if tools:
+            payload["tools"] = tools
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        # Streaming responses are slower; allow a longer per-read timeout.
+        stream_timeout = 120.0
+        t0 = time.perf_counter()
+        client = self._get_client()
+        try:
+            with client.stream(
+                "POST", self._endpoint(),
+                headers=headers, json=payload, timeout=stream_timeout,
+            ) as resp:
+                if resp.status_code >= 400:
+                    # Drain the body so the underlying connection can be reused.
+                    resp.read()
+                    raise RuntimeError(
+                        f"TokenHub HTTP {resp.status_code}: {resp.text[:500]}"
+                    )
+                for line in resp.iter_lines():
+                    if not line or not line.startswith("data: "):
+                        continue
+                    data = line[6:]
+                    if data.strip() == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data)
+                        delta = chunk["choices"][0]["delta"]
+                    except (json.JSONDecodeError, KeyError, IndexError):
+                        continue
+                    yield delta
+        except Exception as exc:
+            elapsed_ms = int((time.perf_counter() - t0) * 1000)
+            if self.verbose:
+                print(f"[LLM STREAM ERROR] ({elapsed_ms}ms) {exc}", flush=True)
+            raise
+
     def close(self) -> None:
         """Close the underlying HTTP client."""
         if self._client:

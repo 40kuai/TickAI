@@ -1,57 +1,57 @@
 # ============================================================
-# TickAI Dockerfile
+# TickAI Dockerfile (Vue 3 + FastAPI)
 # ============================================================
-# Build stage: install dependencies
-FROM python:3.11-slim AS builder
+
+# ---- Stage 1: Build Vue frontend ----
+FROM node:20-slim AS frontend-builder
+
+WORKDIR /frontend
+
+COPY frontend/package.json frontend/package-lock.json* ./
+RUN npm ci --silent 2>/dev/null || npm install --silent
+
+COPY frontend/ ./
+RUN npm run build
+
+# ---- Stage 2: Install Python dependencies ----
+FROM python:3.11-slim AS backend-builder
 
 WORKDIR /app
 
-# Install system dependencies (for bcrypt, paramiko, etc.)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    libffi-dev \
+    build-essential libffi-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first for better layer caching
 COPY requirements.txt .
-
-# Install dependencies to a local directory
 RUN pip install --user --no-cache-dir -r requirements.txt
 
-# ============================================================
-# Runtime stage
-# ============================================================
+# ---- Stage 3: Runtime ----
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install runtime system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy installed dependencies from builder
-COPY --from=builder /root/.local /root/.local
-
-# Make sure local bin is in PATH
+# Copy Python dependencies
+COPY --from=backend-builder /root/.local /root/.local
 ENV PATH=/root/.local/bin:$PATH \
-    PYTHONUNBUFFERED=1 \
-    STREAMLIT_SERVER_PORT=8502 \
-    STREAMLIT_SERVER_HEADLESS=true \
-    STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
+    PYTHONUNBUFFERED=1
 
 # Copy application code
 COPY . .
 
-# Create data directory for SQLite
+# Copy Vue build output to static/ (served by FastAPI)
+COPY --from=frontend-builder /frontend/dist /app/static
+
+# Create data directory
 RUN mkdir -p /app/data && chmod 700 /app/data
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:8502/_stcore/health || exit 1
+# Health check (FastAPI)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+    CMD curl -f http://localhost:8000/api/auth/me || exit 1
 
-# Expose Streamlit port
-EXPOSE 8502
+EXPOSE 8000
 
-# Run with Alembic migration first, then Streamlit
-CMD ["bash", "-c", "alembic upgrade head && streamlit run ui/app.py"]
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
