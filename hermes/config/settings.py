@@ -13,7 +13,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # Locate the .env file at project root (parent of hermes/)
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent  # /Users/40kuai/Documents/ai/
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 _ENV_FILE = _PROJECT_ROOT / ".env"
 
 

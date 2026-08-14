@@ -15,6 +15,14 @@ if [ -d ".venv" ]; then
     source .venv/bin/activate
 fi
 
+# 加载 .env 到环境变量（JWT_SECRET / ADMIN_INITIAL_PASSWORD / CORS_ORIGINS 等）
+# 保证 api.deps / api.main 中 os.environ.get 能读到，避免 JWT_SECRET 每次启动随机
+if [ -f ".env" ]; then
+    set -a
+    source .env
+    set +a
+fi
+
 # Start FastAPI backend
 nohup python -m uvicorn api.main:app --reload --port "$BACKEND_PORT" > /tmp/fastapi.log 2>&1 &
 BACKEND_PID=$!

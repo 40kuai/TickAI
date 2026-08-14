@@ -452,7 +452,7 @@ onMounted(loadData)
 }
 .detail-link {
   font-size: 13px;
-  color: var(--color-primary, #6366f1);
+  color: var(--color-primary);
 }
 
 /* 工具标签 */
@@ -463,7 +463,7 @@ onMounted(loadData)
   font-size: 12px;
   font-weight: 500;
   background: rgba(99, 102, 241, 0.1);
-  color: #6366f1;
+  color: var(--color-primary);
 }
 
 .col-content {
@@ -502,7 +502,7 @@ onMounted(loadData)
   z-index: 1000;
 }
 .modal-box {
-  background: var(--color-bg, #fff);
+  background: var(--color-card);
   border-radius: 12px;
   width: 90%;
   max-width: 720px;
@@ -519,7 +519,7 @@ onMounted(loadData)
   align-items: center;
   justify-content: space-between;
   padding: 16px 24px;
-  border-bottom: 1px solid var(--color-border, #e5e7eb);
+  border-bottom: 1px solid var(--color-border);
 }
 .modal-header h3 {
   font-size: 16px;
@@ -585,7 +585,7 @@ onMounted(loadData)
 
 /* 代码块 */
 .detail-code {
-  background: var(--color-bg-code, #1e1e2e);
+  background: var(--color-bg-code);
   color: #cdd6f4;
   padding: 12px 16px;
   border-radius: 8px;
@@ -599,7 +599,7 @@ onMounted(loadData)
 }
 .error-code {
   background: rgba(239, 68, 68, 0.08);
-  color: #dc2626;
+  color: var(--color-danger);
 }
 
 /* LDAP 用户卡片 */
@@ -609,7 +609,7 @@ onMounted(loadData)
   gap: 12px;
 }
 .user-card {
-  border: 1px solid var(--color-border, #e5e7eb);
+  border: 1px solid var(--color-border);
   border-radius: 8px;
   overflow: hidden;
 }
@@ -618,7 +618,7 @@ onMounted(loadData)
   align-items: center;
   gap: 12px;
   padding: 10px 14px;
-  background: var(--color-bg-hover, #f9fafb);
+  background: var(--color-bg-hover);
 }
 .user-name {
   font-weight: 600;
@@ -663,21 +663,21 @@ onMounted(loadData)
   font-size: 12px;
   font-weight: 600;
   background: rgba(34, 197, 94, 0.1);
-  color: #16a34a;
+  color: var(--color-success);
 }
 .usage-bar.warning {
   background: rgba(245, 158, 11, 0.1);
-  color: #d97706;
+  color: var(--color-warning);
 }
 .usage-bar.critical {
   background: rgba(239, 68, 68, 0.1);
-  color: #dc2626;
+  color: var(--color-danger);
 }
 .result-summary {
   margin-top: 8px;
   font-size: 13px;
   color: var(--color-text-secondary);
 }
-.text-warning { color: #d97706; }
-.text-danger { color: #dc2626; }
+.text-warning { color: var(--color-warning); }
+.text-danger { color: var(--color-danger); }
 </style>

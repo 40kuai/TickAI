@@ -208,7 +208,7 @@ onMounted(loadData)
   gap: var(--spacing-md);
 }
 .stat-card {
-  background: #fff;
+  background: var(--color-card);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-sm);
   padding: 20px;

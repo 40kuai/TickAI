@@ -298,8 +298,11 @@ function handleSSEEvent(evt, aiMsg) {
 
 // 滚动到底部
 function scrollToBottom() {
-  const el = chatScrollRef.value
-  if (el) el.scrollTop = el.scrollHeight
+  // 等待浏览器完成 layout 后再滚动，确保 scrollHeight 已更新
+  requestAnimationFrame(() => {
+    const el = chatScrollRef.value
+    if (el) el.scrollTop = el.scrollHeight
+  })
 }
 
 // 切换工具调用展开
@@ -329,10 +332,10 @@ function onEnter(e) {
   sendMessage()
 }
 
-// 监听消息变化自动滚动
+// 监听消息变化自动滚动（post 钩子在 DOM 更新后触发）
 watch(messages, () => {
   nextTick(scrollToBottom)
-}, { deep: true })
+}, { deep: true, flush: 'post' })
 
 onMounted(loadConversations)
 </script>
@@ -463,7 +466,7 @@ onMounted(loadConversations)
 .conv-panel {
   width: 260px;
   flex-shrink: 0;
-  background: #fff;
+  background: var(--color-card);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-sm);
   display: flex;
@@ -528,7 +531,7 @@ onMounted(loadConversations)
 .chat-main {
   flex: 1;
   min-width: 0;
-  background: #fff;
+  background: var(--color-card);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-sm);
   display: flex;
@@ -640,7 +643,7 @@ onMounted(loadConversations)
 .tool-args,
 .tool-result {
   margin-top: 6px;
-  background: #0f172a;
+  background: var(--color-bg-code);
   color: #e2e8f0;
   padding: 10px;
   border-radius: var(--radius-sm);
@@ -653,7 +656,7 @@ onMounted(loadConversations)
 }
 .badge-warning {
   background: rgba(245, 158, 11, 0.15);
-  color: #d97706;
+  color: var(--color-warning);
 }
 
 /* 气泡 */
@@ -691,14 +694,14 @@ onMounted(loadConversations)
 }
 .msg-markdown :deep(li) { margin: 2px 0; }
 .msg-markdown :deep(code) {
-  background: rgba(0,0,0,0.08);
+  background: var(--color-bg-hover);
   padding: 2px 5px;
   border-radius: 3px;
   font-family: 'SF Mono', Menlo, Consolas, monospace;
   font-size: 12px;
 }
 .msg-markdown :deep(pre) {
-  background: #0f172a;
+  background: var(--color-bg-code);
   color: #e2e8f0;
   padding: 10px 12px;
   border-radius: 6px;
@@ -778,11 +781,17 @@ onMounted(loadConversations)
   flex: 1;
   resize: none;
   padding: 10px 12px;
+  background: var(--color-card);
+  color: var(--color-text);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   outline: none;
   font-size: 14px;
+  font-family: inherit;
   transition: var(--transition);
+}
+.input-area::placeholder {
+  color: var(--color-text-light);
 }
 .input-area:focus {
   border-color: var(--color-primary);

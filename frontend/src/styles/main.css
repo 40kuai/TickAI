@@ -46,6 +46,41 @@
 
   /* 过渡 */
   --transition: all 0.2s ease;
+
+  /* 悬停背景 */
+  --color-bg-hover: rgba(99, 102, 241, 0.05);
+  --color-bg-code: #1e1e2e;
+}
+
+/* ===== 暗色模式 ===== */
+[data-theme="dark"] {
+  --gradient-primary: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  --color-primary: #818cf8;
+  --color-primary-dark: #6366f1;
+
+  --color-bg: #0f172a;
+  --color-card: #1e293b;
+  --color-sidebar: #0f172a;
+
+  --color-text: #e2e8f0;
+  --color-text-secondary: #94a3b8;
+  --color-text-light: #64748b;
+  --color-text-inverse: #0f172a;
+
+  --color-border: #334155;
+  --color-border-light: #1e293b;
+
+  --color-success: #34d399;
+  --color-warning: #fbbf24;
+  --color-danger: #f87171;
+  --color-info: #60a5fa;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.5);
+
+  --color-bg-hover: rgba(99, 102, 241, 0.1);
+  --color-bg-code: #11111b;
 }
 
 /* ===== 重置样式 ===== */
@@ -155,7 +190,7 @@ ol {
 .btn-outline {
   border-color: var(--color-border);
   color: var(--color-text);
-  background: #fff;
+  background: var(--color-card);
 }
 .btn-outline:hover { border-color: var(--color-primary); color: var(--color-primary); }
 
@@ -185,7 +220,7 @@ ol {
   padding: 10px 12px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
-  background: #fff;
+  background: var(--color-card);
   color: var(--color-text);
   transition: var(--transition);
   outline: none;

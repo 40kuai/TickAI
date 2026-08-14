@@ -107,6 +107,7 @@ def persist_tool_run(
     result_json: str,
     triggered_by: str,
     triggered_context: Optional[dict] = None,
+    duration_ms: Optional[int] = None,
 ) -> RunRecord:
     """Persist the result of any tool handler (which returns a JSON string) as a
     RunRecord. Used by LLM wrappers (e.g. check_resources_on_server) so the
@@ -114,11 +115,17 @@ def persist_tool_run(
 
     `command_label` is a short identifier (e.g. "check_resources", "list_services")
     that shows up in the History page — NOT an actual shell command.
+
+    `duration_ms`: actual execution duration measured by the caller. If omitted,
+    falls back to the (near-zero) time taken by this function's own bookkeeping,
+    which is not meaningful — callers that measure real execution time should
+    always pass this value.
     """
     started_at = datetime.utcnow()
     result = json.loads(result_json)
     finished_at = datetime.utcnow()
-    duration_ms = int((finished_at - started_at).total_seconds() * 1000)
+    if duration_ms is None:
+        duration_ms = int((finished_at - started_at).total_seconds() * 1000)
 
     if "error" in result:
         err_msg = result["error"]

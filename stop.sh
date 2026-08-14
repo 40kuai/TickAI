@@ -18,12 +18,5 @@ if [ -n "$FRONTEND_PIDS" ]; then
     echo "  前端已停止 (PID: $FRONTEND_PIDS)"
 fi
 
-# Also kill old Streamlit if running
-STREAMLIT_PIDS=$(lsof -ti:8502 2>/dev/null)
-if [ -n "$STREAMLIT_PIDS" ]; then
-    kill $STREAMLIT_PIDS 2>/dev/null
-    echo "  旧 Streamlit 已停止 (PID: $STREAMLIT_PIDS)"
-fi
-
 sleep 1
 echo "✅ TickAI 已停止"

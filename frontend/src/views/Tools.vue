@@ -213,7 +213,7 @@ onMounted(loadTools)
   gap: var(--spacing-md);
 }
 .tool-card {
-  background: #fff;
+  background: var(--color-card);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-sm);
   overflow: hidden;
@@ -310,7 +310,7 @@ onMounted(loadTools)
   margin-top: 14px;
 }
 .result-pre {
-  background: #0f172a;
+  background: var(--color-bg-code);
   color: #e2e8f0;
   padding: 12px;
   border-radius: var(--radius-sm);

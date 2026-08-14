@@ -93,7 +93,7 @@ async function handleSubmit() {
 .login-card {
   width: 100%;
   max-width: 400px;
-  background: #fff;
+  background: var(--color-card);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
   padding: 40px 36px;

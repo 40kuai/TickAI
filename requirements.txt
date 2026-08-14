@@ -1,7 +1,10 @@
-# Hermes 依赖项
+# TickAI 依赖项
 
 # Web 框架
-streamlit>=1.50.0
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-jose[cryptography]>=3.3.0
+python-multipart>=0.0.6
 
 # SSH 连接
 paramiko>=5.0.0
@@ -17,21 +20,10 @@ python-dotenv>=1.0.0
 
 # 网络请求
 requests>=2.30.0
-
-# Jinja2 (用于 Streamlit)
-Jinja2>=3.0.0
+httpx>=0.25.0
 
 # 密码哈希
 bcrypt>=4.0.0
 
-# 异步HTTP
-httpx>=0.25.0
-
 # 数据库迁移
 alembic>=1.12.0
-
-# FastAPI
-fastapi>=0.104.0
-uvicorn[standard]>=0.24.0
-python-jose[cryptography]>=3.3.0
-python-multipart>=0.0.6

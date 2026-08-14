@@ -17,6 +17,7 @@ from fastapi import HTTPException, Request, status
 from jose import JWTError, jwt
 
 from hermes.auth import validate_session
+from hermes.config.settings import get as _get_setting
 from hermes.data.models import User
 
 # ---------------------------------------------------------------------------
@@ -25,7 +26,7 @@ from hermes.data.models import User
 # Secret is read from JWT_SECRET env var. If not set, a random value is
 # generated on each startup (acceptable for dev; in production always set
 # JWT_SECRET so tokens survive restarts).
-JWT_SECRET: str = os.environ.get("JWT_SECRET") or secrets.token_urlsafe(32)
+JWT_SECRET: str = _get_setting("JWT_SECRET") or secrets.token_urlsafe(32)
 JWT_ALGORITHM: str = "HS256"
 JWT_EXPIRE_HOURS: int = 24
 
