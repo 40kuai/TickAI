@@ -24,7 +24,7 @@
 | 3 | 身份认证 | 飞书 OpenID 白名单 | 简单可控,适合内部运维 |
 | 4 | 回调方式 | 飞书长连接(WebSocket) | 无需公网回调地址,部署省心 |
 | 5 | 对话引擎 | 复用 `hermes.agents.chat.chat()` | 工具循环/历史/持久化全部复用 |
-| 6 | 并发策略 | 异步队列 | 长对话不阻塞其他用户 |
+| 6 | 并发策略 | 线程模型异步队列(`queue.Queue`) | 长对话不阻塞其他用户。`chat()` 为阻塞式,故用**线程**而非 asyncio(原草案写 `asyncio.Queue` 已按实施修正为 `queue.Queue`) |
 
 ## Architecture (in plain words)
 
@@ -107,24 +107,25 @@ def FEISHU_ENABLED() -> bool:
 
 ### 4. 消息分发(`bot.py`)
 
-- 进程级 `asyncio.Queue` 任务队列
+- 线程安全 `queue.Queue` 任务队列(`chat()` 为阻塞式,故用线程模型)
 - 收到合法消息:
-  1. 立即回复「正在处理,请稍候…」
+  1. 立即回复「正在处理,请稍候…」(失败不阻断入队,有异常兜底)
   2. 消息入队
-- 会话映射:内存 dict `open_id -> conversation_id`,保持多轮上下文
+- 会话映射:内存 dict `open_id -> conversation_id`(线程安全 Lock),保持多轮上下文
 - 群聊回复:`im.message.reply` 回复到原消息(不刷屏)
 
 ### 5. 后台任务(`tasks.py`)
 
-- worker 循环从队列取消息,在**线程池**中执行(chat() 为阻塞式)
+- worker 在**独立 daemon 线程**中阻塞消费队列(chat() 为阻塞式,不适合线程池)
 - 调用 `hermes.agents.chat.chat()`(复用工具循环与历史持久化)
 - 通过 `im.message.create`(单聊)或 `im.message.reply`(群聊)发送 `reply`
-- 发送失败重试 2 次,记录日志
+- 发送失败重试 2 次(`_send_with_retry`),记录日志
 
 ### 6. 启动接入(`api/main.py`)
 
-- FastAPI startup 事件中,若 `FEISHU_ENABLED()` 则启动长连接后台任务
-- 进程退出时优雅关闭
+- FastAPI startup 事件中**惰性导入** `hermes.feishu.ws` 并调用 `start_feishu_bot()`,若 `FEISHU_ENABLED()` 则启动长连接后台任务(lark-oapi 未安装也不阻塞 app 启动)
+- `start_feishu_bot()` 有幂等保护(重复调用不重复建连接)
+- shutdown 事件调用 `stop_feishu_bot()`(SDK 无优雅关闭接口,daemon 线程随进程退出)
 
 ## Data Flow
 
@@ -164,10 +165,17 @@ def FEISHU_ENABLED() -> bool:
   - 队列入队/出队
   - `chat()` 被 mock 调用
   - 会话映射保持
+  - 即时回复异常兜底(失败仍入队)、open_id 判空
 - `tests/feishu/test_tasks.py`:
   - worker 处理一条消息并调用发送
   - 发送失败重试
+- `tests/feishu/test_ws.py`:
+  - 事件注册、未启用跳过、启用拉起线程
+  - `_send_with_retry` 重试 2 次 / 成功立即返回
+  - `start_feishu_bot` 幂等保护、stop 重置全局
 - 配置缺失时 `FEISHU_ENABLED()` 为 False,不启动长连接(降级)
+
+> 实施状态(2026-08-20):`tests/feishu/` 共 28 个测试全部通过。项目存在 65 个既有测试失败(Server 模型缺 username 字段等历史遗留),与本功能无关。
 
 ## Open Questions (待确认)
 
