@@ -7,7 +7,10 @@ from __future__ import annotations
 import logging
 import threading
 
-import lark_oapi as lark
+try:  # noqa: SIM105
+    import lark_oapi as lark
+except ImportError:  # lark-oapi 未安装时优雅降级,不阻塞应用启动
+    lark = None
 
 from hermes.config import settings as config
 
@@ -81,6 +84,10 @@ def start_feishu_bot() -> None:
     global _bot, _ws_client, _worker_thread
     if not config.FEISHU_ENABLED():
         logger.info("飞书未配置,跳过启动")
+        return
+
+    if _bot is not None:
+        logger.info("飞书 bot 已启动,跳过重复启动")
         return
 
     app_id = config.FEISHU_APP_ID()
@@ -163,9 +170,11 @@ def start_feishu_bot() -> None:
 
 def stop_feishu_bot() -> None:
     """关闭飞书连接(供进程退出时调用)。"""
-    global _ws_client
+    global _bot, _ws_client, _worker_thread
     if _ws_client is not None:
         # lark 1.7.3 的 ws.Client 无优雅关闭接口(仅 start),其所在线程为 daemon,
         # 随进程退出自动结束,这里仅释放引用避免误用已停止的客户端。
         logger.info("飞书长连接正在停止,释放 ws 客户端引用")
         _ws_client = None
+    _bot = None
+    _worker_thread = None

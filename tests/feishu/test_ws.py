@@ -2,6 +2,7 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
+import hermes.feishu.ws as ws_module
 from hermes.feishu.ws import _send_with_retry, build_event_handler, start_feishu_bot
 
 
@@ -34,12 +35,24 @@ class BuildEventHandlerTests(unittest.TestCase):
 
 
 class StartFeishuBotTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # 重置模块级单例,避免用例间相互干扰
+        ws_module._bot = None
+        ws_module._ws_client = None
+        ws_module._worker_thread = None
+
+    def tearDown(self) -> None:
+        ws_module._bot = None
+        ws_module._ws_client = None
+        ws_module._worker_thread = None
+
     def test_disabled_does_nothing(self):
         with patch("hermes.feishu.ws.config") as mock_config, \
              patch("hermes.feishu.ws.FeishuBot") as mock_bot_cls:
             mock_config.FEISHU_ENABLED.return_value = False
             start_feishu_bot()
             mock_bot_cls.assert_not_called()
+            self.assertIsNone(ws_module._bot)
 
     def test_enabled_builds_bot_and_worker_thread(self):
         with patch("hermes.feishu.ws.config") as mock_config, \
@@ -73,6 +86,44 @@ class StartFeishuBotTests(unittest.TestCase):
                     .register_p2_im_message_receive_v1.return_value.build.return_value,
                 log_level=mock_lark.LogLevel.INFO,
             )
+
+    def test_second_call_is_idempotent_skips_restart(self):
+        with patch("hermes.feishu.ws.config") as mock_config, \
+             patch("hermes.feishu.ws.lark") as mock_lark, \
+             patch("hermes.feishu.ws.FeishuBot") as mock_bot_cls, \
+             patch("hermes.feishu.ws.FeishuWorker") as mock_worker_cls, \
+             patch("hermes.feishu.ws.threading.Thread") as mock_thread:
+            mock_config.FEISHU_ENABLED.return_value = True
+            mock_config.FEISHU_APP_ID.return_value = "cli_x"
+            mock_config.FEISHU_APP_SECRET.return_value = "sec"
+            mock_config.FEISHU_OPENID_WHITELIST.return_value = ["ou_abc"]
+            # 第一次启动:正常构建
+            start_feishu_bot()
+            self.assertIsNotNone(ws_module._bot)
+            self.assertEqual(mock_thread.call_count, 2)
+            # 第二次启动:幂等保护,直接跳过,不重复构建/拉线程
+            start_feishu_bot()
+            mock_bot_cls.assert_called_once()
+            self.assertEqual(mock_thread.call_count, 2)
+            mock_lark.ws.Client.assert_called_once()
+
+    def test_stop_resets_module_globals(self):
+        with patch("hermes.feishu.ws.config") as mock_config, \
+             patch("hermes.feishu.ws.lark") as mock_lark, \
+             patch("hermes.feishu.ws.FeishuBot") as mock_bot_cls, \
+             patch("hermes.feishu.ws.FeishuWorker") as mock_worker_cls, \
+             patch("hermes.feishu.ws.threading.Thread") as mock_thread:
+            mock_config.FEISHU_ENABLED.return_value = True
+            mock_config.FEISHU_APP_ID.return_value = "cli_x"
+            mock_config.FEISHU_APP_SECRET.return_value = "sec"
+            mock_config.FEISHU_OPENID_WHITELIST.return_value = ["ou_abc"]
+            start_feishu_bot()
+            self.assertIsNotNone(ws_module._bot)
+            self.assertIsNotNone(ws_module._ws_client)
+            ws_module.stop_feishu_bot()
+            self.assertIsNone(ws_module._bot)
+            self.assertIsNone(ws_module._ws_client)
+            self.assertIsNone(ws_module._worker_thread)
 
 
 if __name__ == "__main__":

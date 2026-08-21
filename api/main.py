@@ -24,7 +24,6 @@ from .history_routes import router as history_router
 from .server_routes import router as server_router
 from .ssh_credential_routes import router as ssh_cred_router
 from .tool_routes import router as tool_router
-from hermes.feishu.ws import start_feishu_bot, stop_feishu_bot
 
 app = FastAPI(title="TickAI API", version="1.0.0")
 
@@ -58,11 +57,16 @@ app.include_router(history_router)
 def startup() -> None:
     init_db()
     init_default_user()
+    # 惰性导入:仅在应用真正启动时才加载飞书模块(lark-oapi),避免模块加载期硬依赖
+    from hermes.feishu.ws import start_feishu_bot
+
     start_feishu_bot()
 
 
 @app.on_event("shutdown")
 def shutdown() -> None:
+    from hermes.feishu.ws import stop_feishu_bot
+
     stop_feishu_bot()
 
 
