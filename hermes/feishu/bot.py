@@ -48,11 +48,21 @@ class FeishuBot:
         message_id = message.get("message_id")
         open_id = (event.get("sender") or {}).get("sender_id", {}).get("open_id")
 
-        # 立即回复「处理中」(群聊回复原消息,单聊直接发送)
+        # 立即回复「处理中」(群聊回复原消息,单聊直接发送)。
+        # 若失败只记录日志,不阻断后续入队,保证任务仍会被处理。
         if chat_type == "group" and message_id:
-            self.reply_message(message_id, "正在处理,请稍候…")
+            try:
+                self.reply_message(message_id, "正在处理,请稍候…")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("即时回复(群聊)失败: %s", exc)
         else:
-            self.send_message(open_id, "正在处理,请稍候…")
+            if not open_id:
+                logger.warning("缺少 open_id,无法发送「处理中」,任务仍入队")
+            else:
+                try:
+                    self.send_message(open_id, "正在处理,请稍候…")
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("即时回复(单聊)失败: %s", exc)
 
         # 构造任务并入队
         task = self._build_task(event, text)

@@ -75,6 +75,32 @@ class FeishuBotTests(unittest.TestCase):
         )
         self.assertEqual(self.bot.queue.qsize(), 0)
 
+    def test_immediate_p2p_reply_failure_still_enqueues(self):
+        # 「处理中」发送失败不应阻止任务入队
+        self.send_fn.side_effect = RuntimeError("network down")
+        self.bot.handle_event(
+            {
+                "sender": {"sender_id": {"open_id": "ou_abc"}},
+                "message": {"chat_type": "p2p", "message_type": "text",
+                            "content": '{"text":"check disk"}'},
+            }
+        )
+        self.assertEqual(self.bot.queue.qsize(), 1)
+
+    def test_immediate_group_reply_failure_still_enqueues(self):
+        # 群聊「处理中」回复失败同样不应阻止任务入队
+        self.reply_fn.side_effect = RuntimeError("network down")
+        self.bot.handle_event(
+            {
+                "sender": {"sender_id": {"open_id": "ou_abc"}},
+                "message": {"chat_type": "group", "message_type": "text",
+                            "content": '{"text":"check disk"}',
+                            "mentions": [{"key": "k"}],
+                            "message_id": "om_123"},
+            }
+        )
+        self.assertEqual(self.bot.queue.qsize(), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
