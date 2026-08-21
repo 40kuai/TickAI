@@ -124,3 +124,22 @@ def LDAP_USE_SSL() -> bool:
 def LDAP_CONFIGURED() -> bool:
     """检查 LDAP 是否已配置"""
     return bool(LDAP_SERVER() and LDAP_BIND_DN())
+
+
+# 飞书 — 运行时读取
+def FEISHU_APP_ID() -> str:
+    return get("FEISHU_APP_ID", "")
+
+
+def FEISHU_APP_SECRET() -> str:
+    return get("FEISHU_APP_SECRET", "")
+
+
+def FEISHU_OPENID_WHITELIST() -> list:
+    raw = get("FEISHU_OPENID_WHITELIST", "")
+    return [x.strip() for x in raw.split(",") if x.strip()]
+
+
+def FEISHU_ENABLED() -> bool:
+    """检查飞书是否已配置"""
+    return bool(FEISHU_APP_ID() and FEISHU_APP_SECRET())
