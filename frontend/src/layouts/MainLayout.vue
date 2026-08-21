@@ -1,11 +1,29 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
+
+// 主题切换
+const isDark = ref(false)
+
+function applyTheme(dark) {
+  isDark.value = dark
+  document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light')
+  localStorage.setItem('tickai-theme', dark ? 'dark' : 'light')
+}
+
+function toggleTheme() {
+  applyTheme(!isDark.value)
+}
+
+onMounted(() => {
+  const saved = localStorage.getItem('tickai-theme') || 'light'
+  applyTheme(saved === 'dark')
+})
 
 // 移动端侧边栏折叠状态
 const sidebarOpen = ref(false)
@@ -85,9 +103,14 @@ async function handleLogout() {
             <div class="user-meta" v-if="createdAt">注册于 {{ createdAt }}</div>
           </div>
         </div>
-        <button class="btn btn-ghost btn-sm logout-btn" @click="handleLogout">
-          退出登录
-        </button>
+        <div class="footer-actions">
+          <button class="btn btn-ghost btn-sm theme-btn" @click="toggleTheme" :title="isDark ? '切换亮色' : '切换暗色'">
+            {{ isDark ? '☀' : '☾' }}
+          </button>
+          <button class="btn btn-ghost btn-sm logout-btn" @click="handleLogout">
+            退出登录
+          </button>
+        </div>
       </div>
     </aside>
 
@@ -208,12 +231,27 @@ async function handleLogout() {
   color: rgba(248, 250, 252, 0.5);
 }
 .logout-btn {
-  width: 100%;
+  flex: 1;
   background: rgba(255, 255, 255, 0.08);
   color: #fff;
 }
 .logout-btn:hover {
   background: rgba(239, 68, 68, 0.3);
+}
+.footer-actions {
+  display: flex;
+  gap: 8px;
+}
+.theme-btn {
+  width: 36px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  font-size: 16px;
+  padding: 0;
+  flex-shrink: 0;
+}
+.theme-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
 }
 
 /* 主区 */
@@ -228,7 +266,7 @@ async function handleLogout() {
   align-items: center;
   gap: 12px;
   padding: 14px 18px;
-  background: #fff;
+  background: var(--color-card);
   border-bottom: 1px solid var(--color-border);
 }
 .toggle-btn {

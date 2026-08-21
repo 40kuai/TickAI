@@ -1,13 +1,14 @@
 """FastAPI application entry point.
 
-Replaces the Streamlit UI server. Serves the JSON API consumed by the
-Vue frontend and, in production, serves the built Vue static assets.
+Serves the JSON API consumed by the Vue frontend and, in production,
+serves the built Vue static assets.
 
 Run with:
     uvicorn api.main:app --reload --port 8000
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -27,11 +28,12 @@ from .tool_routes import router as tool_router
 app = FastAPI(title="TickAI API", version="1.0.0")
 
 # ---------------------------------------------------------------------------
-# CORS - allow the Vite dev server (http://localhost:5173)
+# CORS - configurable via environment variable
 # ---------------------------------------------------------------------------
+_cors_origins = os.environ.get("CORS_ORIGINS", "http://localhost:5173")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=[o.strip() for o in _cors_origins.split(",") if o.strip()],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

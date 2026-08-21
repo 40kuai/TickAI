@@ -81,33 +81,30 @@ LDAP_SEARCH_USER_SCHEMA = {
         "Search for user information in LDAP directory. STRICTLY READ-ONLY.\n\n"
         "This tool ONLY performs search queries. It cannot modify, create, "
         "delete, lock/unlock, or reset any LDAP entries.\n\n"
-        "Supports searching by username, email, or UID. Returns user entries "
-        "with attributes: cn, uid, mail, department, title, phone, and account "
-        "status (expiration, lockout, disabled, password expired, last logon).\n\n"
+        "Pass a single query value (username, email, or UID). The tool "
+        "automatically tries sAMAccountName -> mail -> uid in sequence, "
+        "stopping at the first match.\n\n"
+        "Returns user entries with attributes: cn, username (sAMAccountName), "
+        "uid, mail, department, title, phone, and account status (expiration, "
+        "lockout, disabled, password expired, last logon).\n\n"
         "IMPORTANT: When presenting results, report the data exactly as returned. "
         "Do NOT calculate or estimate relative time (e.g. '2 months until expiry'). "
         "Only state the factual timestamp.\n\n"
-        "Usage examples:\n"
-        "  - Search by username: {\"search_type\": \"username\", \"search_value\": \"john\"}\n"
-        "  - Search by email: {\"search_type\": \"email\", \"search_value\": \"john@example.com\"}\n"
-        "  - Search by UID: {\"search_type\": \"uid\", \"search_value\": \"jdoe\"}\n\n"
+        "Usage example:\n"
+        "  {\"query\": \"helei\"}\n"
+        "  {\"query\": \"helei@example.com\"}\n\n"
         "LDAP configuration (server, bind DN, password) is read from environment "
         "variables. This tool requires LDAP_SERVER and LDAP_BIND_DN to be configured."
     ),
     "parameters": {
         "type": "object",
         "properties": {
-            "search_type": {
-                "type": "string",
-                "enum": ["username", "email", "uid"],
-                "description": "Type of search to perform.",
-            },
-            "search_value": {
+            "query": {
                 "type": "string",
                 "description": "The value to search for (username, email, or UID).",
             },
         },
-        "required": ["search_type", "search_value"],
+        "required": ["query"],
     },
 }
 
@@ -128,14 +125,10 @@ def _escape_ldap_filter(value: str) -> str:
 
 
 def ldap_search_user_handler(args: Dict[str, Any], **kwargs: Any) -> str:
-    search_type = args.get("search_type")
-    search_value = args.get("search_value")
+    query = args.get("query")
 
-    if not search_type or not search_value:
-        return tool_error("search_type and search_value are required")
-
-    if search_type not in ["username", "email", "uid"]:
-        return tool_error(f"invalid search_type: {search_type}")
+    if not query:
+        return tool_error("query is required")
 
     server = LDAP_SERVER()
     port = LDAP_PORT()
@@ -153,26 +146,35 @@ def ldap_search_user_handler(args: Dict[str, Any], **kwargs: Any) -> str:
         from ldap3 import Server, Connection, SUBTREE
 
         ldap_server = Server(server, port=port, use_ssl=use_ssl, get_info=False)
+        escaped_value = _escape_ldap_filter(query)
+        # 按优先级依次尝试: sAMAccountName -> mail (精确匹配)
+        filter_chain = [
+            ("sAMAccountName", f"(sAMAccountName={escaped_value})"),
+            ("mail", f"(mail={escaped_value})"),
+        ]
+        attributes = [
+            "cn", "sAMAccountName", "uid", "mail", "department", "title",
+            "telephoneNumber", "mobile", "manager", "description",
+            # Account status
+            "userAccountControl", "accountExpires", "lockoutTime",
+            "pwdLastSet", "badPwdCount", "lastLogon",
+            # Password expiry (computed by AD)
+            "msDS-UserPasswordExpiryTimeComputed",
+        ]
+
         # READ-ONLY: connection is used exclusively for search, never modify
         with Connection(ldap_server, bind_dn, bind_password, auto_bind=True) as conn:
-            escaped_value = _escape_ldap_filter(search_value)
-            filter_map = {
-                "username": f"(cn=*{escaped_value}*)",
-                "email": f"(mail=*{escaped_value}*)",
-                "uid": f"(uid=*{escaped_value}*)",
-            }
-            search_filter = filter_map[search_type]
-            attributes = [
-                "cn", "uid", "mail", "department", "title",
-                "telephoneNumber", "mobile", "manager", "description",
-                # Account status
-                "userAccountControl", "accountExpires", "lockoutTime",
-                "pwdLastSet", "badPwdCount", "lastLogon",
-            ]
-            conn.search(search_base, search_filter, search_scope=SUBTREE, attributes=attributes)
-
             results = []
-            for entry in conn.entries:
+            matched_field = None
+            for field_name, search_filter in filter_chain:
+                conn.search(search_base, search_filter, search_scope=SUBTREE, attributes=attributes)
+                if conn.entries:
+                    results = conn.entries
+                    matched_field = field_name
+                    break
+
+            users = []
+            for entry in results:
                 # Parse account control flags
                 uac_raw = entry.userAccountControl.value if entry.userAccountControl else None
                 uac_info = _parse_uac(uac_raw)
@@ -180,6 +182,7 @@ def ldap_search_user_handler(args: Dict[str, Any], **kwargs: Any) -> str:
                 user_data = {
                     "dn": str(entry.entry_dn),
                     "cn": entry.cn.value if entry.cn else None,
+                    "username": entry.sAMAccountName.value if entry.sAMAccountName else None,
                     "uid": entry.uid.value if entry.uid else None,
                     "email": entry.mail.value if entry.mail else None,
                     "department": entry.department.value if entry.department else None,
@@ -195,16 +198,21 @@ def ldap_search_user_handler(args: Dict[str, Any], **kwargs: Any) -> str:
                     "account_locked": uac_info.get("locked", None),
                     "password_expired": uac_info.get("password_expired", None),
                     "password_last_set": _parse_win_time(entry.pwdLastSet.value if entry.pwdLastSet else None),
+                    "password_expires": _parse_win_time(
+                        entry["msDS-UserPasswordExpiryTimeComputed"].value
+                        if entry["msDS-UserPasswordExpiryTimeComputed"]
+                        else None
+                    ),
                     "bad_password_count": entry.badPwdCount.value if entry.badPwdCount else None,
                     "last_logon": _parse_win_time(entry.lastLogon.value if entry.lastLogon else None),
                 }
-                results.append(user_data)
+                users.append(user_data)
 
             return tool_result(
-                total=len(results),
-                search_type=search_type,
-                search_value=search_value,
-                users=results,
+                total=len(users),
+                query=query,
+                matched_by=matched_field,
+                users=users,
             )
     except ImportError:
         return tool_error("ldap3 library not installed")
