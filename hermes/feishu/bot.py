@@ -36,6 +36,10 @@ class FeishuBot:
     # ------------------------------------------------------------------
     def handle_event(self, event: Dict[str, Any]) -> None:
         """处理一条飞书消息事件。立即回复「处理中」并入队。"""
+        # 调试用:无论是否放行,都记录发送者 open_id,便于首次配置白名单时获取。
+        sender_open_id = (event.get("sender") or {}).get("sender_id", {}).get("open_id")
+        logger.info("收到飞书消息: open_id=%s", sender_open_id)
+
         if not should_respond(event, self.whitelist):
             return
 
