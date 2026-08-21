@@ -129,7 +129,7 @@ def start_feishu_bot() -> None:
                 .content(lark.JSON.marshal({"text": text}))
                 .build()
             )
-            req = ReplyMessageRequest.builder().message_id(message_id).body(body).build()
+            req = ReplyMessageRequest.builder().message_id(message_id).request_body(body).build()
             resp = api_client.im.v1.message.reply(req)
             if not resp.success():
                 raise RuntimeError(f"code={resp.code} msg={resp.msg}")
@@ -165,16 +165,7 @@ def stop_feishu_bot() -> None:
     """关闭飞书连接(供进程退出时调用)。"""
     global _ws_client
     if _ws_client is not None:
-        try:
-            _ws_client.stop()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("停止飞书连接异常: %s", exc)
+        # lark 1.7.3 的 ws.Client 无优雅关闭接口(仅 start),其所在线程为 daemon,
+        # 随进程退出自动结束,这里仅释放引用避免误用已停止的客户端。
+        logger.info("飞书长连接正在停止,释放 ws 客户端引用")
         _ws_client = None
-
-
-def _cleanup_for_tests():
-    """仅供测试重置进程级单例。"""
-    global _bot, _ws_client, _worker_thread
-    _bot = None
-    _ws_client = None
-    _worker_thread = None

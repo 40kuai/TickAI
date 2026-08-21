@@ -2,7 +2,24 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
-from hermes.feishu.ws import build_event_handler, start_feishu_bot
+from hermes.feishu.ws import _send_with_retry, build_event_handler, start_feishu_bot
+
+
+class SendWithRetryTests(unittest.TestCase):
+    def test_retries_failing_function_two_times_then_gives_up(self):
+        fn = MagicMock(side_effect=RuntimeError("boom"))
+        with patch("hermes.feishu.ws.logger") as mock_logger:
+            _send_with_retry(fn)
+        # 1 次原始调用 + 重试 2 次 = 共 3 次尝试
+        self.assertEqual(fn.call_count, 3)
+        mock_logger.error.assert_called_once()
+
+    def test_returns_immediately_on_success(self):
+        fn = MagicMock()
+        with patch("hermes.feishu.ws.logger"):
+            _send_with_retry(fn)
+        # 成功后只调用 1 次,不触发重试
+        fn.assert_called_once()
 
 
 class BuildEventHandlerTests(unittest.TestCase):
