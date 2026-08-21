@@ -1,0 +1,62 @@
+"""Tests for hermes.feishu.ws — startup wiring (SDK mocked)."""
+import unittest
+from unittest.mock import MagicMock, patch
+
+from hermes.feishu.ws import build_event_handler, start_feishu_bot
+
+
+class BuildEventHandlerTests(unittest.TestCase):
+    def test_builds_handler_and_registers_event(self):
+        bot = MagicMock()
+        with patch("hermes.feishu.ws.lark") as mock_lark:
+            handler = build_event_handler(bot)
+            # 断言 builder 被调用且注册了消息事件
+            mock_lark.EventDispatcherHandler.builder.assert_called_once()
+            mock_builder = mock_lark.EventDispatcherHandler.builder.return_value
+            mock_builder.register_p2_im_message_receive_v1.assert_called_once()
+
+
+class StartFeishuBotTests(unittest.TestCase):
+    def test_disabled_does_nothing(self):
+        with patch("hermes.feishu.ws.config") as mock_config, \
+             patch("hermes.feishu.ws.FeishuBot") as mock_bot_cls:
+            mock_config.FEISHU_ENABLED.return_value = False
+            start_feishu_bot()
+            mock_bot_cls.assert_not_called()
+
+    def test_enabled_builds_bot_and_worker_thread(self):
+        with patch("hermes.feishu.ws.config") as mock_config, \
+             patch("hermes.feishu.ws.lark") as mock_lark, \
+             patch("hermes.feishu.ws.FeishuBot") as mock_bot_cls, \
+             patch("hermes.feishu.ws.FeishuWorker") as mock_worker_cls, \
+             patch("hermes.feishu.ws.threading.Thread") as mock_thread:
+            mock_config.FEISHU_ENABLED.return_value = True
+            mock_config.FEISHU_APP_ID.return_value = "cli_x"
+            mock_config.FEISHU_APP_SECRET.return_value = "sec"
+            mock_config.FEISHU_OPENID_WHITELIST.return_value = ["ou_abc"]
+            start_feishu_bot()
+            # bot 被构建
+            mock_bot_cls.assert_called_once()
+            # 拉起两个后台线程:worker 消费线程 + 长连接客户端线程
+            self.assertEqual(mock_thread.call_count, 2)
+            self.assertEqual(mock_thread.call_args_list[0][1]["daemon"], True)
+            # worker 线程以 run_forever 为 target,args 为 (bot,)
+            worker_thread_kwargs = mock_thread.call_args_list[0][1]
+            self.assertEqual(worker_thread_kwargs["target"],
+                             mock_worker_cls.return_value.run_forever)
+            self.assertEqual(worker_thread_kwargs["args"][0],
+                             mock_bot_cls.return_value)
+            # ws 客户端线程以 ws_client.start 为 target
+            ws_thread_kwargs = mock_thread.call_args_list[1][1]
+            self.assertIs(ws_thread_kwargs["target"], mock_lark.ws.Client.return_value.start)
+            # ws 客户端按配置构造
+            mock_lark.ws.Client.assert_called_once_with(
+                "cli_x", "sec",
+                event_handler=mock_lark.EventDispatcherHandler.builder.return_value
+                    .register_p2_im_message_receive_v1.return_value.build.return_value,
+                log_level=mock_lark.LogLevel.INFO,
+            )
+
+
+if __name__ == "__main__":
+    unittest.main()
