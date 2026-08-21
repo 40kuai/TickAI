@@ -1,16 +1,17 @@
 """飞书长连接客户端 — 启动 WebSocket、注册事件、拉起 worker 线程.
 
 使用官方 SDK 的长连接(WebSocket)模式,无需公网回调地址。
+
+重要:lark_oapi 的 ws 客户端在模块导入时用 asyncio.get_event_loop() 捕获
+事件循环,若在 uvicorn 主循环(uvloop)运行时导入,会绑定到正在运行的
+主循环,导致 ws.Client.start() 抛出 "this event loop is already running"。
+因此本模块不在此处 import lark_oapi,而是通过 _import_lark() 延迟导入,
+并保证首次导入发生在无运行中事件循环的专用线程中。
 """
 from __future__ import annotations
 
 import logging
 import threading
-
-try:  # noqa: SIM105
-    import lark_oapi as lark
-except ImportError:  # lark-oapi 未安装时优雅降级,不阻塞应用启动
-    lark = None
 
 from hermes.config import settings as config
 
@@ -26,6 +27,19 @@ _worker_thread: threading.Thread = None
 
 # 发送/回复消息的失败重试次数(规格:失败重试 2 次)
 _RETRY_TIMES = 2
+
+
+def _import_lark():
+    """延迟导入 lark_oapi(必须在无运行中事件循环的线程中首次调用).
+
+    lark_oapi 会连带加载 lark_oapi.ws.client,该模块在导入时用
+    asyncio.get_event_loop() 捕获事件循环并全局固定。若在 uvicorn
+    主循环运行时导入,会绑定到正在运行的 uvloop 主循环,后续
+    ws.Client.start() 将抛 "this event loop is already running"。
+    因此在干净的专用线程中首次导入,使其绑定到专属的新循环。
+    """
+    import lark_oapi  # noqa: PLC0415
+    return lark_oapi
 
 
 def _send_with_retry(fn) -> None:
@@ -44,6 +58,7 @@ def _send_with_retry(fn) -> None:
 
 def build_event_handler(bot: FeishuBot):
     """构造事件分发器,注册接收消息事件。"""
+    lark = _import_lark()
     handler = (
         lark.EventDispatcherHandler.builder("", "")
         .register_p2_im_message_receive_v1(
@@ -80,7 +95,12 @@ def _on_message(bot: FeishuBot, data) -> None:
 
 
 def start_feishu_bot() -> None:
-    """启动飞书长连接(按配置)。未启用时静默跳过。"""
+    """启动飞书长连接(按配置)。未启用时静默跳过。
+
+    lark 的导入与 ws 启动被放进专用的 _start_ws 线程,确保首次
+    import lark_oapi 时该线程没有运行中的事件循环,避免与 uvicorn
+    主循环(uvloop)冲突。
+    """
     global _bot, _ws_client, _worker_thread
     if not config.FEISHU_ENABLED():
         logger.info("飞书未配置,跳过启动")
@@ -94,11 +114,24 @@ def start_feishu_bot() -> None:
     app_secret = config.FEISHU_APP_SECRET()
     whitelist = config.FEISHU_OPENID_WHITELIST()
 
-    # 注入真实的飞书消息发送/回复函数(通过 SDK 客户端)
-    api_client = lark.Client.builder().app_id(app_id).app_secret(app_secret).build()
+    # worker 需要发送/回复函数,而这些函数在 ws 线程首次 import lark 后才
+    # 可用。这里先建一个"延迟初始化"的发送器,内部通过 _import_lark() 获取。
+    api_client_holder = {"client": None}
+
+    def _get_api_client():
+        if api_client_holder["client"] is None:
+            lark = _import_lark()
+            api_client_holder["client"] = (
+                lark.Client.builder()
+                .app_id(app_id)
+                .app_secret(app_secret)
+                .build()
+            )
+        return api_client_holder["client"]
 
     def send_message(open_id: str, text: str) -> None:
-        from lark_oapi.api.im.v1 import (
+        lark = _import_lark()
+        from lark_oapi.api.im.v1 import (  # noqa: PLC0415
             CreateMessageRequest,
             CreateMessageRequestBody,
         )
@@ -117,14 +150,15 @@ def start_feishu_bot() -> None:
                 .request_body(body)
                 .build()
             )
-            resp = api_client.im.v1.message.create(req)
+            resp = _get_api_client().im.v1.message.create(req)
             if not resp.success():
                 raise RuntimeError(f"code={resp.code} msg={resp.msg}")
 
         _send_with_retry(_do_send)
 
     def reply_message(message_id: str, text: str) -> None:
-        from lark_oapi.api.im.v1 import (
+        lark = _import_lark()
+        from lark_oapi.api.im.v1 import (  # noqa: PLC0415
             ReplyMessageRequest,
             ReplyMessageRequestBody,
         )
@@ -137,7 +171,7 @@ def start_feishu_bot() -> None:
                 .build()
             )
             req = ReplyMessageRequest.builder().message_id(message_id).request_body(body).build()
-            resp = api_client.im.v1.message.reply(req)
+            resp = _get_api_client().im.v1.message.reply(req)
             if not resp.success():
                 raise RuntimeError(f"code={resp.code} msg={resp.msg}")
 
@@ -156,16 +190,36 @@ def start_feishu_bot() -> None:
     )
     _worker_thread.start()
 
-    # 长连接客户端(阻塞,放后台线程)
-    event_handler = build_event_handler(_bot)
-    _ws_client = lark.ws.Client(
-        app_id,
-        app_secret,
-        event_handler=event_handler,
-        log_level=lark.LogLevel.INFO,
-    )
-    threading.Thread(target=_ws_client.start, daemon=True).start()
-    logger.info("飞书长连接已启动")
+    # 长连接启动线程(阻塞,daemon)。此线程内首次 import lark,
+    # 保证 lark 模块级事件循环绑定到本线程专属的新循环,不与主循环冲突。
+    threading.Thread(
+        target=_start_ws,
+        args=(app_id, app_secret, _bot),
+        daemon=True,
+    ).start()
+
+
+def _start_ws(app_id: str, app_secret: str, bot: FeishuBot) -> None:
+    """在专用线程中启动飞书长连接(阻塞运行).
+
+    必须由独立线程调用:此函数内部首次 import lark_oapi,确保 lark 的
+    模块级事件循环绑定到本线程专属的新循环,避免与 uvicorn 主循环冲突。
+    """
+    global _ws_client
+    try:
+        lark = _import_lark()
+        event_handler = build_event_handler(bot)
+        client = lark.ws.Client(
+            app_id,
+            app_secret,
+            event_handler=event_handler,
+            log_level=lark.LogLevel.INFO,
+        )
+        _ws_client = client
+        logger.info("飞书长连接已启动")
+        client.start()  # 阻塞:运行事件循环直至连接断开
+    except Exception as exc:  # noqa: BLE001
+        logger.error("飞书长连接启动失败: %s", exc)
 
 
 def stop_feishu_bot() -> None:
