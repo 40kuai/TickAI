@@ -182,9 +182,8 @@ CONTEXT_PARAM = {
     "context": {
         "type": "string",
         "description": (
-            "Kubeconfig context name (e.g., 'prod-cluster'). "
-            "If omitted, uses the current-context from ~/.kube/config. "
-            "Use list_k8s_contexts to discover available contexts."
+            "Kubeconfig 上下文名称(如 'prod-cluster')。不传则使用 ~/.kube/config 中的当前上下文。"
+            "可用 list_k8s_contexts 工具查看可用的上下文。"
         ),
     }
 }
@@ -195,11 +194,11 @@ COMMON_PARAMS = {
         **CONTEXT_PARAM,
         "namespace": {
             "type": "string",
-            "description": "Filter to a single namespace. Mutually exclusive with all-namespaces.",
+            "description": "按单个命名空间过滤。与 all-namespaces 互斥。",
         },
         "field_selector": {
             "type": "string",
-            "description": "kubectl field-selector expression (e.g., 'status.phase=Running').",
+            "description": "kubectl field-selector 表达式(如 'status.phase=Running')。",
         },
     },
 }
@@ -208,12 +207,10 @@ COMMON_PARAMS = {
 NODES_SCHEMA = {
     "name": "check_k8s_nodes",
     "description": (
-        "Read-only inspection of all Kubernetes nodes. Returns node status, "
-        "capacity, allocatable resources, and any conditions (Ready, MemoryPressure, "
-        "DiskPressure, etc.). NEVER modifies the cluster.\n\n"
-        "Use this to diagnose cluster-wide pressure — for example, when services "
-        "report 'no nodes available' or pods are stuck in Pending. Look at the "
-        "'conditions' field for pressure signals."
+        "只读检查所有 Kubernetes 节点。返回节点状态、容量、可分配资源及各种条件"
+        "(Ready、MemoryPressure、DiskPressure 等)。绝不会修改集群。\n\n"
+        "用于诊断集群级资源压力——例如服务报 'no nodes available' 或 Pod 卡在 Pending 时。"
+        "重点看 'conditions' 字段中的压力信号。"
     ),
     "parameters": {
         "type": "object",
@@ -226,10 +223,9 @@ NODES_SCHEMA = {
 PODS_SCHEMA = {
     "name": "check_k8s_pods",
     "description": (
-        "Read-only listing of Kubernetes pods. Returns pod phase, container "
-        "status, restart counts, and resource requests/limits. NEVER modifies the cluster.\n\n"
-        "Use this to find unhealthy pods, find pods without resource limits, or "
-        "audit workloads. Supports filtering by namespace or field-selector."
+        "只读列出 Kubernetes Pod。返回 Pod 阶段、容器状态、重启次数及资源 requests/limits。"
+        "绝不会修改集群。\n\n"
+        "用于查找异常 Pod、没有资源限制的 Pod,或审计工作负载。支持按命名空间或 field-selector 过滤。"
     ),
     "parameters": COMMON_PARAMS,
 }
@@ -237,12 +233,10 @@ PODS_SCHEMA = {
 EVENTS_SCHEMA = {
     "name": "check_k8s_events",
     "description": (
-        "Read-only listing of Kubernetes events sorted by most recent. "
-        "Returns Warning events by default (FailedScheduling, OOMKilling, Backoff, "
-        "FailedMount, etc.). Set include_normal=true to see all event types. "
-        "NEVER modifies the cluster.\n\n"
-        "Use this to root-cause why pods are failing or stuck. OOMKilling events "
-        "specifically indicate a container was killed for using too much memory."
+        "只读列出 Kubernetes 事件,按最近时间排序。默认只返回 Warning 事件"
+        "(FailedScheduling、OOMKilling、Backoff、FailedMount 等)。设 include_normal=true 查看所有类型。"
+        "绝不会修改集群。\n\n"
+        "用于定位 Pod 失败或卡住的原因。OOMKilling 事件表示容器因内存超限被杀死。"
     ),
     "parameters": {
         "type": "object",
@@ -251,7 +245,7 @@ EVENTS_SCHEMA = {
             "include_normal": {
                 "type": "boolean",
                 "default": False,
-                "description": "Include Normal events. Default is Warning only.",
+                "description": "是否包含 Normal 事件。默认只显示 Warning。",
             },
         },
     },
@@ -260,10 +254,8 @@ EVENTS_SCHEMA = {
 DEPLOYMENTS_SCHEMA = {
     "name": "check_k8s_deployments",
     "description": (
-        "Read-only listing of Kubernetes deployments. Returns desired/ready/available "
-        "replica counts. NEVER modifies the cluster.\n\n"
-        "Use this to find deployments that aren't fully rolled out, deployments "
-        "with unavailable replicas, or to audit replica counts."
+        "只读列出 Kubernetes Deployment。返回期望/就绪/可用副本数。绝不会修改集群。\n\n"
+        "用于查找未完全发布的 Deployment、有不可用副本的 Deployment,或审计副本数。"
     ),
     "parameters": COMMON_PARAMS,
 }
@@ -271,9 +263,9 @@ DEPLOYMENTS_SCHEMA = {
 SERVICES_SCHEMA = {
     "name": "check_k8s_services",
     "description": (
-        "Read-only listing of Kubernetes services. Returns type (ClusterIP, NodePort, "
-        "LoadBalancer), cluster IP, ports, and selectors. NEVER modifies the cluster.\n\n"
-        "Use this to discover service endpoints or audit service-to-pod mappings."
+        "只读列出 Kubernetes Service。返回类型(ClusterIP、NodePort、LoadBalancer)、"
+        "集群 IP、端口及选择器。绝不会修改集群。\n\n"
+        "用于发现服务端点或审计 Service 与 Pod 的映射关系。"
     ),
     "parameters": COMMON_PARAMS,
 }
@@ -281,10 +273,8 @@ SERVICES_SCHEMA = {
 CONTEXTS_SCHEMA = {
     "name": "list_k8s_contexts",
     "description": (
-        "List available kubeconfig contexts. Returns context name, cluster, user, "
-        "namespace, and whether it's the current context.\n\n"
-        "Call this first when the user asks about a cluster you don't know — the "
-        "context name is what other K8s tools need."
+        "列出可用的 kubeconfig 上下文。返回上下文名称、集群、用户、命名空间及是否为当前上下文。\n\n"
+        "当用户询问你不认识的集群时,先调用本工具——上下文名称是其他 K8s 工具需要的参数。"
     ),
     "parameters": {
         "type": "object",

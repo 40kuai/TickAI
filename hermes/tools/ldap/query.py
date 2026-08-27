@@ -78,30 +78,25 @@ def _parse_uac(val) -> dict:
 LDAP_SEARCH_USER_SCHEMA = {
     "name": "ldap_search_user",
     "description": (
-        "Search for user information in LDAP directory. STRICTLY READ-ONLY.\n\n"
-        "This tool ONLY performs search queries. It cannot modify, create, "
-        "delete, lock/unlock, or reset any LDAP entries.\n\n"
-        "Pass a single query value (username, email, or UID). The tool "
-        "automatically tries sAMAccountName -> mail -> uid in sequence, "
-        "stopping at the first match.\n\n"
-        "Returns user entries with attributes: cn, username (sAMAccountName), "
-        "uid, mail, department, title, phone, and account status (expiration, "
-        "lockout, disabled, password expired, last logon).\n\n"
-        "IMPORTANT: When presenting results, report the data exactly as returned. "
-        "Do NOT calculate or estimate relative time (e.g. '2 months until expiry'). "
-        "Only state the factual timestamp.\n\n"
-        "Usage example:\n"
+        "在 LDAP 目录中查询用户信息。严格只读。\n\n"
+        "本工具只执行查询,不能修改、创建、删除、锁定/解锁或重置任何 LDAP 条目。\n\n"
+        "传入单个查询值(用户名、邮箱或 UID)。工具会自动依次尝试 "
+        "sAMAccountName → mail → uid,在第一个匹配处停止。\n\n"
+        "返回用户条目属性:cn、username(sAMAccountName)、uid、mail、department、"
+        "title、phone 以及账户状态(过期时间、锁定、禁用、密码过期、最后登录)。\n\n"
+        "重要:呈现结果时,请如实报告返回的数据。不要计算或推测相对时间(如'还有 2 个月过期')。"
+        "只陈述事实时间戳。\n\n"
+        "用法示例:\n"
         "  {\"query\": \"helei\"}\n"
         "  {\"query\": \"helei@example.com\"}\n\n"
-        "LDAP configuration (server, bind DN, password) is read from environment "
-        "variables. This tool requires LDAP_SERVER and LDAP_BIND_DN to be configured."
+        "LDAP 配置(服务器、绑定 DN、密码)从环境变量读取。本工具要求配置 LDAP_SERVER 和 LDAP_BIND_DN。"
     ),
     "parameters": {
         "type": "object",
         "properties": {
             "query": {
                 "type": "string",
-                "description": "The value to search for (username, email, or UID).",
+                "description": "要查询的值(用户名、邮箱或 UID)。",
             },
         },
         "required": ["query"],

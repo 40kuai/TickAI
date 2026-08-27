@@ -247,13 +247,13 @@ def check_disk_handler(args: Dict[str, Any], **kwargs: Any) -> str:
 DISK_SCHEMA = {
     "name": "check_disk_usage",
     "description": (
-        "Check disk usage on a remote Linux server via SSH. Read-only.\n\n"
-        "PREFERRED: Pass server_id from list_servers. Credentials are auto-resolved "
-        "from the server's bound SSH credential - no password or key needed.\n\n"
-        "FALLBACK: Pass host + username + password (or key_content) explicitly.\n\n"
-        "Runs `df -Th`, parses output into structured data, returns mount points "
-        "sorted by usage percent. The remote server is left completely untouched.\n\n"
-        "Examples:\n"
+        "通过 SSH 检查远程 Linux 服务器的磁盘使用情况。只读。\n\n"
+        "首选:传入 list_servers 返回的 server_id。凭据从服务器绑定的 SSH 凭据自动解析,"
+        "无需密码或密钥。\n\n"
+        "备用:显式传入 host + username + password(或 key_content)。\n\n"
+        "执行 `df -Th`,解析输出为结构化数据,按使用率排序返回挂载点。"
+        "远程服务器完全不被改动。\n\n"
+        "示例:\n"
         "  check_disk_usage(server_id=1)\n"
         "  check_disk_usage(server_id=3, command='df -h')\n"
     ),
@@ -263,34 +263,34 @@ DISK_SCHEMA = {
             "server_id": {
                 "type": "integer",
                 "description": (
-                    "Server ID from list_servers. PREFERRED method - "
-                    "credentials auto-resolved from bound SSH credential."
+                    "来自 list_servers 的服务器 ID。首选方式——"
+                    "凭据从绑定的 SSH 凭据自动解析。"
                 ),
             },
             "host": {
                 "type": "string",
-                "description": "Hostname or IP. Only needed if server_id not provided.",
+                "description": "主机名或 IP。仅当未提供 server_id 时需要。",
             },
             "username": {
                 "type": "string",
-                "description": "SSH username. Only needed if server_id not provided.",
+                "description": "SSH 用户名。仅当未提供 server_id 时需要。",
             },
             "password": {
                 "type": "string",
-                "description": "SSH password. Only needed if server_id not provided.",
+                "description": "SSH 密码。仅当未提供 server_id 时需要。",
             },
             "key_content": {
                 "type": "string",
-                "description": "PEM private key content. Alternative to password.",
+                "description": "PEM 私钥内容。密码的替代方式。",
             },
             "port": {
                 "type": "integer",
-                "description": "SSH port. Default 22.",
+                "description": "SSH 端口。默认 22。",
                 "default": 22,
             },
             "command": {
                 "type": "string",
-                "description": "df command variant: 'df -Th', 'df -h', or 'df'.",
+                "description": "df 命令变体:'df -Th'、'df -h' 或 'df'。",
                 "default": "df -Th",
             },
         },

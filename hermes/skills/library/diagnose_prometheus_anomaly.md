@@ -38,14 +38,13 @@ severity: info
 
 ## How to use the tools
 
-Prometheus 监控查询**只有一个工具**：
+Prometheus 监控查询共 **3 个专用工具**，每个工具覆盖一个查询场景，**单次调用即可拿全所需指标**，避免多次调用消耗轮次：
 
-**`prometheus_service_health`**（Prometheus/ARMS 监控查询唯一入口），两种模式：
+1. **`prometheus_service_discovery`**（服务发现）：传 `service_prefix`（如 `"nfc-.*"`），返回该前缀下**实际存在的服务名列表**。巡检前先调用，确认要检查哪些服务。
+2. **`prometheus_service_health`**（服务健康快照，**核心工具**）：传 `service`（如 `"nfc-.*"` 或 `"nfc-finance"`），**一次调用并行查询** 服务请求(request)、数据库(database)、SQL、JVM、系统(system) **五个维度全部核心指标**，返回结构化健康快照。检查 nfc 服务健康/状态/异常时**必须**用这个模式，不要逐个指标查询。
+3. **`prometheus_metric_query`**（任意指标深度查询）：传 `query`（PromQL），执行范围查询（默认最近 10 分钟），用于健康快照发现某维度异常后**深入定位**具体指标的趋势/明细。
 
-1. **服务健康快照（默认）**：传 `service`（如 `"nfc-.*"` 或 `"nfc-finance"`），一次调用取回该服务的服务请求、数据库、JVM、系统四类核心指标的结构化快照。检查 nfc 服务健康状态时**必须**用这个模式。
-2. **任意指标查询**：传 `query`（PromQL），执行指定指标查询（最近 10 分钟），用于快照发现异常后深入定位。
-
-**所有 Prometheus 相关查询都走这一个工具，不要发明或想象其它查询工具。**
+**所有 Prometheus 相关查询都走这 3 个工具，不要发明或想象其它查询工具，不要用任意指标查询代替健康快照。**
 
 **重要**：PromQL 中包含引号时，需要在 JSON 字符串中用反斜杠转义，例如：
 `avg(arms_db_requests_seconds_ign_rpc{service=~"nfc-.*"}) by(service)` 中的 `"nfc-.*"` 需要写作 `\"nfc-.*\"`。
@@ -54,9 +53,10 @@ Prometheus 监控查询**只有一个工具**：
 
 ## ✅ 推荐流程（避免轮次耗尽）
 
-1. **调用一次 `prometheus_service_health(service="nfc-.*")`** 拿全 nfc 服务的核心指标快照。
-2. 只有在快照发现某个维度异常、需要深入定位时，才再调用一次 `prometheus_service_health` 并传 `query`（PromQL）补充查询。
-3. 这样通常 **1-2 次工具调用** 就能完成诊断并输出报告，不会触顶 `(max tool rounds reached)`。
+1. **先调用 `prometheus_service_discovery(service_prefix="nfc-.*")`** 确认 nfc 下实际存在的服务（若已明确目标服务可跳过）。
+2. **再调用一次 `prometheus_service_health(service="nfc-.*")`** 拿全五个维度的健康快照（22 条核心指标一次拿回）。
+3. 只有在快照发现某个维度异常、需要深入定位时，才再调用一次 `prometheus_metric_query` 并传 `query`（PromQL）补充查询。
+4. 这样通常 **2-3 次工具调用** 就能完成诊断并输出报告，不会触顶 `(max tool rounds reached)`。
 
 ## ⚠️ VALID METRICS WHITELIST (READ THIS FIRST)
 
@@ -120,9 +120,10 @@ ARMS 没有 `up` 指标。要检查服务是否存活，使用以下方法：
 
 按以下顺序依次检查，发现异常立即记录，继续下一个检查。
 
-**首先调用一次 `prometheus_service_health(service="nfc-.*")` 获取全部核心指标快照，
+**首先调用一次 `prometheus_service_discovery(service_prefix="nfc-.*")` 获取服务列表，
+再调用一次 `prometheus_service_health(service="nfc-.*")` 获取全部五个维度的健康快照，
 然后基于快照结果按下述维度分析。只有快照显示某维度有异常时，才再次调用
-`prometheus_service_health` 并传 `query`（PromQL）深入定位。**
+`prometheus_metric_query` 并传 `query`（PromQL）深入定位。**
 
 ---
 
@@ -140,23 +141,15 @@ ARMS 没有 `up` 指标。要检查服务是否存活，使用以下方法：
 
 ### Step 0: 发现服务
 
-在所有检查之前，先查询 `arms_db_requests_seconds_ign_rpc{service=~"nfc-.*"}`，
-从返回结果中提取所有 `service` 标签值，作为后续检查的服务列表基础。
+在所有检查之前，**调用 `prometheus_service_discovery(service_prefix="nfc-.*")`**，
+从返回的 `services` 列表确认实际存在的服务名，作为后续检查的服务列表基础。
 
-**PromQL:**
-```
-avg(arms_db_requests_seconds_ign_rpc{service=~"nfc-.*"}) by(service)
-```
-
-如果结果为空，说明数据库指标可能没有数据，改用以下查询兜底获取服务列表：
-```
-avg(arms_system_cpu_idle{service=~"nfc-.*"}) by(service)
-```
+如果返回的服务列表为空，说明该前缀下当前没有上报数据的服务，直接返回"未发现 nfc 服务数据"。
 
 从结果中提取服务名列表，例如：`["nfc-finance", "nfc-fund", "nfc-user-center", ...]`。
 
-后续所有检查的 `SERVICE_FILTER` 统一使用 `nfc-.*` 通配，不需要逐个服务查询。
-如果查询结果中某个服务有数据而其他服务没有，属于正常现象（不同服务可能上报不同指标）。
+后续健康快照的 `service` 过滤统一使用 `nfc-.*` 通配，不需要逐个服务查询。
+如果快照结果中某个服务有数据而其他服务没有，属于正常现象（不同服务可能上报不同指标）。
 
 ---
 

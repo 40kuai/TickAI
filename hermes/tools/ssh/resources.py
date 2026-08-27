@@ -51,28 +51,26 @@ SERVICES_CMD = "systemctl list-units --type=service --all --no-pager --no-legend
 RESOURCES_SCHEMA = {
     "name": "check_resources",
     "description": (
-        "Read-only CPU/memory/process inspection of a remote Linux host via SSH. "
-        "Returns load averages (1/5/15 min), CPU core count, memory and swap usage, "
-        "and the top CPU-consuming processes. NEVER modifies the server.\n\n"
-        "Output includes a `pressure_level` field ('low'/'medium'/'high') and "
-        "`pressure_reasons` listing which metrics triggered that level. Use these "
-        "to prioritize which server needs attention.\n\n"
-        "When diagnosing root causes, look at `top_processes` first:\n"
-        "  - mysqld/postgres on top + high load + mem pressure → DB load\n"
-        "  - java/python with high mem + low CPU → GC pressure or memory leak\n"
-        "  - kswapd/0 on top + low CPU + high swap → swap thrashing\n"
-        "  - nginx/httpd on top + high load → request surge\n\n"
-        "After diagnosis, recommend optimization (e.g., increase connection pool, "
-        "scale up, add cache, fix slow query). Do NOT suggest restarting services "
-        "from this tool — that requires a separate user-confirmed action."
+        "通过 SSH 只读检查远程 Linux 主机的 CPU/内存/进程状况。"
+        "返回负载均值(1/5/15 分钟)、CPU 核心数、内存和 Swap 使用、CPU 占用最高的进程。"
+        "绝不会修改服务器。\n\n"
+        "输出包含 `pressure_level` 字段('low'/'medium'/'high')和 "
+        "`pressure_reasons`(列出触发该等级的指标)。用它们来判断哪些服务器需要优先关注。\n\n"
+        "定位根因时,先看 `top_processes`:\n"
+        "  - mysqld/postgres 靠前 + 高负载 + 内存压力 → 数据库负载\n"
+        "  - java/python 高内存 + 低 CPU → GC 压力或内存泄漏\n"
+        "  - kswapd/0 靠前 + 低 CPU + 高 swap → swap 抖动\n"
+        "  - nginx/httpd 靠前 + 高负载 → 请求激增\n\n"
+        "诊断后给出优化建议(如增加连接池、扩容、加缓存、修复慢查询)。"
+        "不要建议通过本工具重启服务——那需要用户单独确认的操作。"
     ),
     "parameters": {
         "type": "object",
         "properties": {
-            "host": {"type": "string", "description": "Server IP or hostname."},
-            "username": {"type": "string", "description": "SSH username."},
-            "password": {"type": "string", "description": "SSH password (plaintext - demo only). Either password or key_content required."},
-            "key_content": {"type": "string", "description": "PEM-encoded SSH private key content for key-based auth. Either password or key_content required."},
+            "host": {"type": "string", "description": "服务器 IP 或主机名。"},
+            "username": {"type": "string", "description": "SSH 用户名。"},
+            "password": {"type": "string", "description": "SSH 密码。password 或 key_content 至少提供一个。"},
+            "key_content": {"type": "string", "description": "PEM 编码的 SSH 私钥内容,用于密钥认证。password 或 key_content 至少提供一个。"},
             "port": {"type": "integer", "default": 22, "minimum": 1, "maximum": 65535},
         },
         "required": ["host", "username"],
@@ -83,24 +81,24 @@ RESOURCES_SCHEMA = {
 SERVICES_SCHEMA = {
     "name": "list_services",
     "description": (
-        "Read-only enumeration of systemd-managed services on a remote Linux host. "
-        "Returns each service's name, state (active/inactive/failed), "
-        "sub-state (running/exited/dead/...), and an `is_abnormal` flag.\n\n"
-        "A service is considered abnormal when:\n"
-        "  - state is not 'active' (e.g., 'failed', 'inactive'), OR\n"
-        "  - state is 'active' but sub_state is not in {running, exited, waiting}\n\n"
-        "Sub-state 'exited' is normal for one-shot services (cron, logrotate). "
-        "Sub-state 'waiting' is normal for socket-activated services.\n\n"
-        "This tool NEVER starts, stops, or modifies services. To restart a service, "
-        "the user must explicitly do so via the UI — recommend it instead of doing it."
+        "通过 SSH 只读枚举远程 Linux 主机上由 systemd 管理的服务。"
+        "返回每个服务的名称、state(active/inactive/failed)、"
+        "sub-state(running/exited/dead/...)及 `is_abnormal` 标记。\n\n"
+        "服务被视为异常的条件:\n"
+        "  - state 不是 'active'(如 'failed'、'inactive'),或\n"
+        "  - state 为 'active' 但 sub_state 不在 {running, exited, waiting} 中\n\n"
+        "sub-state 为 'exited' 对一次性服务(cron、logrotate)是正常的;"
+        "sub-state 为 'waiting' 对 socket 激活的服务是正常的。\n\n"
+        "本工具绝不会启动、停止或修改服务。要重启服务,用户必须通过 UI 显式操作——"
+        "给出建议而不是代替执行。"
     ),
     "parameters": {
         "type": "object",
         "properties": {
-            "host": {"type": "string", "description": "Server IP or hostname."},
-            "username": {"type": "string", "description": "SSH username."},
-            "password": {"type": "string", "description": "SSH password (plaintext - demo only). Either password or key_content required."},
-            "key_content": {"type": "string", "description": "PEM-encoded SSH private key content for key-based auth. Either password or key_content required."},
+            "host": {"type": "string", "description": "服务器 IP 或主机名。"},
+            "username": {"type": "string", "description": "SSH 用户名。"},
+            "password": {"type": "string", "description": "SSH 密码。password 或 key_content 至少提供一个。"},
+            "key_content": {"type": "string", "description": "PEM 编码的 SSH 私钥内容,用于密钥认证。password 或 key_content 至少提供一个。"},
             "port": {"type": "integer", "default": 22, "minimum": 1, "maximum": 65535},
         },
         "required": ["host", "username"],

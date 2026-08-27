@@ -17,24 +17,24 @@ from hermes.tools.registry import registry, tool_error, tool_result
 LIST_SERVERS_SCHEMA = {
     "name": "list_servers",
     "description": (
-        "List all registered servers. Optionally filter by tag, name, or active status. "
-        "Returns a JSON object with `servers` (array) and `count` (int). "
-        "SSH credentials are referenced by ssh_credential_id - never exposed to the LLM."
+        "列出所有已注册的服务器。可按 tag、名称或启用状态过滤。"
+        "返回包含 `servers`(数组)和 `count`(数量)的 JSON。"
+        "SSH 凭据以 ssh_credential_id 引用——绝不会向 LLM 暴露。"
     ),
     "parameters": {
         "type": "object",
         "properties": {
             "tag": {
                 "type": "string",
-                "description": "Filter by tag (e.g., 'web', 'db'). Exact match.",
+                "description": "按标签过滤(如 'web'、'db')。精确匹配。",
             },
             "name": {
                 "type": "string",
-                "description": "Filter by server name (substring match).",
+                "description": "按服务器名称过滤(子串匹配)。",
             },
             "active_only": {
                 "type": "boolean",
-                "description": "If true, exclude inactive servers. Default true.",
+                "description": "为 true 时排除停用服务器。默认 true。",
             },
         },
         "required": [],
@@ -77,30 +77,30 @@ def list_servers_handler(args: Dict[str, Any], **kwargs: Any) -> str:
 QUERY_RUNS_SCHEMA = {
     "name": "query_runs",
     "description": (
-        "Query historical run records. Filter by server name, status, triggered_by, "
-        "or a `since` time window. Returns a JSON object with `runs` (array) and `count` (int). "
-        "Each run has id, server_id, server_name, command, status, started_at, duration_ms, triggered_by."
+        "查询历史运行记录。可按服务器名称、状态、触发来源或 `since` 时间窗口过滤。"
+        "返回包含 `runs`(数组)和 `count`(数量)的 JSON。"
+        "每条 run 包含 id、server_id、server_name、command、status、started_at、duration_ms、triggered_by。"
     ),
     "parameters": {
         "type": "object",
         "properties": {
-            "server_name": {"type": "string", "description": "Filter by server name (exact match)."},
+            "server_name": {"type": "string", "description": "按服务器名称过滤(精确匹配)。"},
             "status": {
                 "type": "string",
                 "enum": ["success", "failed", "pending"],
-                "description": "Filter by run status.",
+                "description": "按运行状态过滤。",
             },
             "triggered_by": {
                 "type": "string",
-                "description": "Filter by trigger source (e.g., 'user_button', 'llm_tool_call', 'scheduled').",
+                "description": "按触发来源过滤(如 'user_button'、'llm_tool_call'、'scheduled')。",
             },
             "since": {
                 "type": "string",
-                "description": "Time window like '1h', '1d', '7d' (relative to now).",
+                "description": "时间窗口,如 '1h'、'1d'、'7d'(相对当前时间)。",
             },
             "limit": {
                 "type": "integer",
-                "description": "Max number of records to return. Default 100.",
+                "description": "最大返回记录数。默认 100。",
             },
         },
         "required": [],
