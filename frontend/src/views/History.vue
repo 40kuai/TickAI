@@ -15,7 +15,8 @@ const detail = ref(null)
 // 筛选条件
 const filters = reactive({
   server_name: '',
-  status: ''
+  status: '',
+  type: ''
 })
 
 // 分页
@@ -48,6 +49,27 @@ const TOOL_LABELS = {
 
 function toolLabel(cmd) {
   return TOOL_LABELS[cmd] || cmd || '-'
+}
+
+// 类型标签映射
+const TYPE_LABELS = {
+  run: '服务器操作',
+  skill: 'Skill 巡检',
+  conversation: 'AI 对话',
+}
+
+function typeLabel(t) {
+  return TYPE_LABELS[t] || t || '-'
+}
+
+// 类型徽章样式
+function typeBadge(t) {
+  const map = {
+    run: 'badge-run',
+    skill: 'badge-skill',
+    conversation: 'badge-conv',
+  }
+  return map[t] || 'badge-gray'
 }
 
 // 状态映射
@@ -108,6 +130,7 @@ async function loadData() {
     const params = { limit: 100 }
     if (filters.server_name) params.server_name = filters.server_name
     if (filters.status) params.status = filters.status
+    if (filters.type) params.type = filters.type
     const res = await api.get('/history', { params })
     const data = res.data || {}
     runs.value = data.runs || []
@@ -121,12 +144,14 @@ async function loadData() {
 }
 
 // 查看详情
-async function viewDetail(id) {
+async function viewDetail(item) {
   detailVisible.value = true
   detailLoading.value = true
   detail.value = null
   try {
-    const res = await api.get(`/history/${id}`)
+    const params = {}
+    if (item.type) params.type = item.type
+    const res = await api.get(`/history/${item.id}`, { params })
     detail.value = res.data
   } catch (err) {
     detail.value = { error: err.response?.data?.detail || '加载失败' }
@@ -147,6 +172,7 @@ function applyFilter() {
 function resetFilter() {
   filters.server_name = ''
   filters.status = ''
+  filters.type = ''
   loadData()
 }
 
@@ -163,6 +189,24 @@ function formatResult(data) {
   } catch {
     return String(data)
   }
+}
+
+// 对话消息文本(优先 content,否则展示 tool_calls 概览)
+function convText(m) {
+  if (!m) return ''
+  if (m.content) return m.content
+  const tcs = m.tool_calls || []
+  if (tcs.length) {
+    return tcs.map((tc) => {
+      const fn = tc.function || {}
+      let args = fn.arguments || ''
+      try {
+        args = JSON.stringify(JSON.parse(args), null, 2)
+      } catch {}
+      return `调用工具: ${fn.name || ''}\n参数: ${args}`
+    }).join('\n---\n')
+  }
+  return ''
 }
 
 onMounted(loadData)
@@ -188,6 +232,15 @@ onMounted(loadData)
           placeholder="按服务器名称筛选"
           @keyup.enter="applyFilter"
         />
+      </div>
+      <div class="filter-group">
+        <label class="form-label">类型</label>
+        <select v-model="filters.type" class="form-select">
+          <option value="">全部</option>
+          <option value="run">服务器操作</option>
+          <option value="skill">Skill 巡检</option>
+          <option value="conversation">AI 对话</option>
+        </select>
       </div>
       <div class="filter-group">
         <label class="form-label">状态</label>
@@ -216,7 +269,7 @@ onMounted(loadData)
               <tr>
                 <th>时间</th>
                 <th>类型</th>
-                <th>服务器</th>
+                <th>名称</th>
                 <th>状态</th>
                 <th>来源</th>
                 <th>耗时</th>
@@ -226,15 +279,18 @@ onMounted(loadData)
             <tbody>
               <tr
                 v-for="(r, i) in pagedRuns"
-                :key="r.id ?? i"
+                :key="r.type + '-' + r.id"
                 class="clickable-row"
-                @click="viewDetail(r.id)"
+                @click="viewDetail(r)"
               >
-                <td class="col-time">{{ formatTime(r.started_at) }}</td>
+                <td class="col-time">{{ formatTime(r.time) }}</td>
                 <td>
-                  <span class="tool-tag">{{ toolLabel(r.command) }}</span>
+                  <span class="badge" :class="typeBadge(r.type)">{{ typeLabel(r.type) }}</span>
                 </td>
-                <td>{{ r.server_name || '-' }}</td>
+                <td>
+                  <span class="tool-tag">{{ r.title || '-' }}</span>
+                  <span v-if="r.subtitle" class="text-light"> ({{ r.subtitle }})</span>
+                </td>
                 <td>
                   <span class="badge" :class="statusBadge(r.status)">{{ statusLabel(r.status) }}</span>
                 </td>
@@ -275,8 +331,12 @@ onMounted(loadData)
                 <div class="detail-item">
                   <span class="detail-label">类型</span>
                   <span class="detail-value">
-                    <span class="tool-tag">{{ toolLabel(detail.command) }}</span>
+                    <span class="badge" :class="typeBadge(detail.type)">{{ typeLabel(detail.type) }}</span>
                   </span>
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">名称</span>
+                  <span class="detail-value">{{ detail.title || '-' }}</span>
                 </div>
                 <div class="detail-item">
                   <span class="detail-label">状态</span>
@@ -285,19 +345,12 @@ onMounted(loadData)
                   </span>
                 </div>
                 <div class="detail-item">
-                  <span class="detail-label">服务器</span>
-                  <span class="detail-value">
-                    {{ detail.server_name || '-' }}
-                    <span v-if="detail.server_host" class="text-light">({{ detail.server_host }})</span>
-                  </span>
-                </div>
-                <div class="detail-item">
                   <span class="detail-label">来源</span>
                   <span class="detail-value">{{ triggerLabel(detail.triggered_by) }}</span>
                 </div>
                 <div class="detail-item">
-                  <span class="detail-label">开始时间</span>
-                  <span class="detail-value">{{ formatTime(detail.started_at) }}</span>
+                  <span class="detail-label">时间</span>
+                  <span class="detail-value">{{ formatTime(detail.time) }}</span>
                 </div>
                 <div class="detail-item">
                   <span class="detail-label">耗时</span>
@@ -306,65 +359,115 @@ onMounted(loadData)
               </div>
             </div>
 
-            <!-- 错误信息 -->
-            <div v-if="detail.stderr" class="detail-section">
-              <h4 class="detail-section-title">错误信息</h4>
-              <pre class="detail-code error-code">{{ detail.stderr }}</pre>
-            </div>
+            <!-- ===== 服务器操作详情 (run) ===== -->
+            <template v-if="detail.type === 'run'">
+              <!-- 错误信息 -->
+              <div v-if="detail.detail.stderr" class="detail-section">
+                <h4 class="detail-section-title">错误信息</h4>
+                <pre class="detail-code error-code">{{ detail.detail.stderr }}</pre>
+              </div>
 
-            <!-- 执行结果 -->
-            <div v-if="detail.result" class="detail-section">
-              <h4 class="detail-section-title">执行结果</h4>
-              <!-- LDAP 用户信息特殊渲染 -->
-              <div v-if="detail.result.users && detail.result.users.length" class="result-users">
-                <div v-for="u in detail.result.users" :key="u.dn || u.cn" class="user-card">
-                  <div class="user-card-header">
-                    <span class="user-name">{{ u.cn || u.name || '-' }}</span>
-                    <span v-if="u.title" class="user-title">{{ u.title }}</span>
+              <!-- 执行结果 -->
+              <div v-if="detail.detail.result" class="detail-section">
+                <h4 class="detail-section-title">执行结果</h4>
+                <!-- LDAP 用户信息特殊渲染 -->
+                <div v-if="detail.detail.result.users && detail.detail.result.users.length" class="result-users">
+                  <div v-for="u in detail.detail.result.users" :key="u.dn || u.cn" class="user-card">
+                    <div class="user-card-header">
+                      <span class="user-name">{{ u.cn || u.name || '-' }}</span>
+                      <span v-if="u.title" class="user-title">{{ u.title }}</span>
+                    </div>
+                    <div class="user-card-body">
+                      <div v-if="u.mail" class="user-field"><span class="uf-label">邮箱</span><span class="uf-value">{{ u.mail }}</span></div>
+                      <div v-if="u.department" class="user-field"><span class="uf-label">部门</span><span class="uf-value">{{ u.department }}</span></div>
+                      <div v-if="u.telephone" class="user-field"><span class="uf-label">电话</span><span class="uf-value">{{ u.telephone }}</span></div>
+                      <div v-if="u.dn" class="user-field"><span class="uf-label">DN</span><span class="uf-value mono">{{ u.dn }}</span></div>
+                    </div>
                   </div>
-                  <div class="user-card-body">
-                    <div v-if="u.mail" class="user-field"><span class="uf-label">邮箱</span><span class="uf-value">{{ u.mail }}</span></div>
-                    <div v-if="u.department" class="user-field"><span class="uf-label">部门</span><span class="uf-value">{{ u.department }}</span></div>
-                    <div v-if="u.telephone" class="user-field"><span class="uf-label">电话</span><span class="uf-value">{{ u.telephone }}</span></div>
-                    <div v-if="u.dn" class="user-field"><span class="uf-label">DN</span><span class="uf-value mono">{{ u.dn }}</span></div>
+                </div>
+                <!-- 磁盘信息特殊渲染 -->
+                <div v-else-if="detail.detail.result.mounts && detail.detail.result.mounts.length" class="result-mounts">
+                  <table class="table detail-table">
+                    <thead>
+                      <tr><th>挂载点</th><th>文件系统</th><th>类型</th><th>总量</th><th>已用</th><th>可用</th><th>使用率</th></tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="m in detail.detail.result.mounts" :key="m.mount">
+                        <td>{{ m.mount }}</td>
+                        <td>{{ m.filesystem }}</td>
+                        <td>{{ m.type }}</td>
+                        <td>{{ m.size }}</td>
+                        <td>{{ m.used }}</td>
+                        <td>{{ m.avail }}</td>
+                        <td>
+                          <span class="usage-bar" :class="{ warning: m.warning, critical: m.critical }">{{ m.use_pct }}%</span>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                  <div v-if="detail.detail.result.summary" class="result-summary">
+                    共 {{ detail.detail.result.summary.total_mounts }} 个挂载点，
+                    <span v-if="detail.detail.result.summary.warning_count" class="text-warning">{{ detail.detail.result.summary.warning_count }} 个警告</span>
+                    <span v-if="detail.detail.result.summary.critical_count" class="text-danger">{{ detail.detail.result.summary.critical_count }} 个严重</span>
+                  </div>
+                </div>
+                <!-- 默认 JSON 展示 -->
+                <pre v-else class="detail-code">{{ formatResult(detail.detail.result) }}</pre>
+              </div>
+
+              <!-- 原始输出 -->
+              <div v-if="detail.detail.stdout && !detail.detail.result" class="detail-section">
+                <h4 class="detail-section-title">输出</h4>
+                <pre class="detail-code">{{ detail.detail.stdout }}</pre>
+              </div>
+            </template>
+
+            <!-- ===== Skill 巡检详情 (skill) ===== -->
+            <template v-else-if="detail.type === 'skill'">
+              <div v-if="detail.detail.cluster_context" class="detail-section">
+                <h4 class="detail-section-title">巡检上下文</h4>
+                <pre class="detail-code">{{ detail.detail.cluster_context }}</pre>
+              </div>
+              <div v-if="detail.detail.summary" class="detail-section">
+                <h4 class="detail-section-title">巡检结论</h4>
+                <pre class="detail-code">{{ detail.detail.summary }}</pre>
+              </div>
+              <div v-if="detail.detail.findings && detail.detail.findings.length" class="detail-section">
+                <h4 class="detail-section-title">结构化结论 ({{ detail.detail.findings.length }})</h4>
+                <pre class="detail-code">{{ formatResult(detail.detail.findings) }}</pre>
+              </div>
+            </template>
+
+            <!-- ===== AI 对话详情 (conversation) ===== -->
+            <template v-else-if="detail.type === 'conversation'">
+              <div v-if="detail.detail.total_runs != null" class="detail-section">
+                <h4 class="detail-section-title">信息</h4>
+                <div class="detail-grid">
+                  <div class="detail-item">
+                    <span class="detail-label">创建时间</span>
+                    <span class="detail-value">{{ formatTime(detail.detail.created_at) }}</span>
+                  </div>
+                  <div class="detail-item">
+                    <span class="detail-label">工具调用次数</span>
+                    <span class="detail-value">{{ detail.detail.total_runs }}</span>
                   </div>
                 </div>
               </div>
-              <!-- 磁盘信息特殊渲染 -->
-              <div v-else-if="detail.result.mounts && detail.result.mounts.length" class="result-mounts">
-                <table class="table detail-table">
-                  <thead>
-                    <tr><th>挂载点</th><th>文件系统</th><th>类型</th><th>总量</th><th>已用</th><th>可用</th><th>使用率</th></tr>
-                  </thead>
-                  <tbody>
-                    <tr v-for="m in detail.result.mounts" :key="m.mount">
-                      <td>{{ m.mount }}</td>
-                      <td>{{ m.filesystem }}</td>
-                      <td>{{ m.type }}</td>
-                      <td>{{ m.size }}</td>
-                      <td>{{ m.used }}</td>
-                      <td>{{ m.avail }}</td>
-                      <td>
-                        <span class="usage-bar" :class="{ warning: m.warning, critical: m.critical }">{{ m.use_pct }}%</span>
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-                <div v-if="detail.result.summary" class="result-summary">
-                  共 {{ detail.result.summary.total_mounts }} 个挂载点，
-                  <span v-if="detail.result.summary.warning_count" class="text-warning">{{ detail.result.summary.warning_count }} 个警告</span>
-                  <span v-if="detail.result.summary.critical_count" class="text-danger">{{ detail.result.summary.critical_count }} 个严重</span>
+              <div v-if="detail.detail.messages && detail.detail.messages.length" class="detail-section">
+                <h4 class="detail-section-title">对话内容</h4>
+                <div class="conv-messages">
+                  <div
+                    v-for="(m, mi) in detail.detail.messages"
+                    :key="mi"
+                    class="conv-msg"
+                    :class="'role-' + m.role"
+                  >
+                    <span class="conv-role">{{ m.role === 'user' ? '用户' : m.role === 'assistant' ? 'AI' : '工具' }}</span>
+                    <pre class="conv-body">{{ convText(m) }}</pre>
+                  </div>
                 </div>
               </div>
-              <!-- 默认 JSON 展示 -->
-              <pre v-else class="detail-code">{{ formatResult(detail.result) }}</pre>
-            </div>
-
-            <!-- 原始输出 -->
-            <div v-if="detail.stdout && !detail.result" class="detail-section">
-              <h4 class="detail-section-title">输出</h4>
-              <pre class="detail-code">{{ detail.stdout }}</pre>
-            </div>
+            </template>
           </div>
         </div>
       </div>
@@ -464,6 +567,59 @@ onMounted(loadData)
   font-weight: 500;
   background: rgba(99, 102, 241, 0.1);
   color: var(--color-primary);
+}
+
+/* 类型徽章 */
+.badge-run {
+  background: rgba(99, 102, 241, 0.12);
+  color: var(--color-primary, #6366f1);
+}
+.badge-skill {
+  background: rgba(34, 197, 94, 0.12);
+  color: #22c55e;
+}
+.badge-conv {
+  background: rgba(14, 165, 233, 0.12);
+  color: #0ea5e9;
+}
+
+/* 对话消息列表 */
+.conv-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 400px;
+  overflow-y: auto;
+}
+.conv-msg {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 10px 14px;
+  background: var(--color-bg-hover, rgba(0, 0, 0, 0.02));
+}
+.conv-msg.role-user {
+  border-left: 3px solid var(--color-primary, #6366f1);
+}
+.conv-msg.role-assistant {
+  border-left: 3px solid #22c55e;
+}
+.conv-msg.role-tool {
+  border-left: 3px solid #0ea5e9;
+}
+.conv-role {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: var(--color-text-secondary);
+}
+.conv-body {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--color-text);
 }
 
 .col-content {

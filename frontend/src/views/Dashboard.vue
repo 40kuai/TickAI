@@ -43,6 +43,17 @@ function statusBadge(status) {
   return 'badge-gray'
 }
 
+// 类型标签
+const TYPE_LABELS = {
+  run: '服务器操作',
+  skill: 'Skill 巡检',
+  conversation: 'AI 对话',
+}
+
+function typeLabel(t) {
+  return TYPE_LABELS[t] || t || '-'
+}
+
 // 统计数字卡片
 const statCards = computed(() => [
   { label: '运行总次数', value: stats.value.total, icon: '⟳', tone: 'primary' },
@@ -131,19 +142,19 @@ onMounted(loadData)
           <thead>
             <tr>
               <th>时间</th>
-              <th>服务器</th>
+              <th>类型</th>
+              <th>名称</th>
               <th>状态</th>
-              <th>运行内容</th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="(r, i) in runs" :key="r.id ?? i">
-              <td>{{ formatTime(r.started_at) }}</td>
-              <td>{{ r.server_name || '-' }}</td>
+            <tr v-for="(r, i) in runs" :key="r.type + '-' + r.id">
+              <td>{{ formatTime(r.time) }}</td>
+              <td>{{ typeLabel(r.type) }}</td>
+              <td class="col-content">{{ r.title || '-' }}</td>
               <td>
                 <span class="badge" :class="statusBadge(r.status)">{{ r.status || '-' }}</span>
               </td>
-              <td class="col-content">{{ r.command || '-' }}</td>
             </tr>
           </tbody>
         </table>
