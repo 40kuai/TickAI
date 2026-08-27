@@ -1,9 +1,11 @@
 """Tests for hermes.feishu.ws — startup wiring (SDK mocked)."""
+import json
 import unittest
 from unittest.mock import MagicMock, patch
 
 import hermes.feishu.ws as ws_module
 from hermes.feishu.ws import (
+    _build_post_content,
     _send_with_retry,
     _start_ws,
     build_event_handler,
@@ -109,6 +111,14 @@ class StartFeishuBotTests(unittest.TestCase):
             start_feishu_bot()
             # bot 被构建
             mock_bot_cls.assert_called_once()
+            # 表情函数已注入 bot
+            bot_kwargs = mock_bot_cls.call_args[1]
+            self.assertIn("add_reaction", bot_kwargs)
+            self.assertIn("remove_reaction", bot_kwargs)
+            # 表情函数已注入 worker
+            worker_kwargs = mock_worker_cls.call_args[1]
+            self.assertIn("add_reaction", worker_kwargs)
+            self.assertIn("remove_reaction", worker_kwargs)
             # 拉起两个后台线程:worker 消费线程 + 长连接启动线程
             self.assertEqual(mock_thread.call_count, 2)
             self.assertTrue(mock_thread.call_args_list[0][1]["daemon"])
@@ -160,6 +170,28 @@ class StartFeishuBotTests(unittest.TestCase):
             self.assertIsNone(ws_module._bot)
             self.assertIsNone(ws_module._ws_client)
             self.assertIsNone(ws_module._worker_thread)
+
+
+class BuildPostContentTests(unittest.TestCase):
+    def test_builds_post_with_md_tag(self):
+        # markdown 内容应包装为 post 富文本的 md 标签,由飞书服务端渲染
+        fake_lark = MagicMock()
+        fake_lark.JSON.marshal.side_effect = json.dumps
+        result = _build_post_content("**加粗**\n\n| a | b |\n|---|---|\n| 1 | 2 |", fake_lark)
+        parsed = json.loads(result)
+        self.assertIn("zh_cn", parsed)
+        self.assertEqual(parsed["zh_cn"]["title"], "")
+        row = parsed["zh_cn"]["content"][0]
+        self.assertEqual(row[0]["tag"], "md")
+        self.assertIn("**加粗**", row[0]["text"])
+        self.assertIn("| 1 | 2 |", row[0]["text"])
+
+    def test_preserves_plain_text(self):
+        fake_lark = MagicMock()
+        fake_lark.JSON.marshal.side_effect = json.dumps
+        result = _build_post_content("纯文本消息", fake_lark)
+        parsed = json.loads(result)
+        self.assertEqual(parsed["zh_cn"]["content"][0][0]["text"], "纯文本消息")
 
 
 if __name__ == "__main__":

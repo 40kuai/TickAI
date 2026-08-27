@@ -56,6 +56,22 @@ def _send_with_retry(fn) -> None:
     logger.error("飞书发送重试 %d 次后仍失败: %s", _RETRY_TIMES, last_exc)
 
 
+def _build_post_content(text: str, lark) -> str:
+    """把 Markdown 内容构造为 post 富文本消息的 content JSON 字符串。
+
+    飞书 post 消息的 `md` 标签支持 CommonMark 0.31 + GFM 语法
+    (标题、加粗、斜体、列表、表格、代码块、链接等),由飞书服务端渲染,
+    避免 text 类型直接展示 markdown 原文。lark 用于 JSON.marshal。
+    """
+    payload = {
+        "zh_cn": {
+            "title": "",
+            "content": [[{"tag": "md", "text": text}]],
+        }
+    }
+    return lark.JSON.marshal(payload)
+
+
 def build_event_handler(bot: FeishuBot):
     """构造事件分发器,注册接收消息事件。"""
     lark = _import_lark()
@@ -144,8 +160,8 @@ def start_feishu_bot() -> None:
             body = (
                 CreateMessageRequestBody.builder()
                 .receive_id(open_id)
-                .msg_type("text")
-                .content(lark.JSON.marshal({"text": text}))
+                .msg_type("post")
+                .content(_build_post_content(text, lark))
                 .build()
             )
             req = (
@@ -170,8 +186,8 @@ def start_feishu_bot() -> None:
         def _do_reply() -> None:
             body = (
                 ReplyMessageRequestBody.builder()
-                .msg_type("text")
-                .content(lark.JSON.marshal({"text": text}))
+                .msg_type("post")
+                .content(_build_post_content(text, lark))
                 .build()
             )
             req = ReplyMessageRequest.builder().message_id(message_id).request_body(body).build()
@@ -181,12 +197,76 @@ def start_feishu_bot() -> None:
 
         _send_with_retry(_do_reply)
 
+    def add_reaction(message_id: str, emoji: str):
+        """在指定消息上添加表情回应,返回 reaction_id(供后续取消)。
+
+        Returns:
+            reaction_id(str)或 None(失败时)。失败只记日志,不抛出。
+        """
+        lark = _import_lark()
+        from lark_oapi.api.im.v1 import (  # noqa: PLC0415
+            CreateMessageReactionRequest,
+            CreateMessageReactionRequestBody,
+            Emoji,
+        )
+
+        def _do_add():
+            body = (
+                CreateMessageReactionRequestBody.builder()
+                .reaction_type(
+                    Emoji.builder().emoji_type(emoji).build()
+                )
+                .build()
+            )
+            req = (
+                CreateMessageReactionRequest.builder()
+                .message_id(message_id)
+                .request_body(body)
+                .build()
+            )
+            resp = _get_api_client().im.v1.message_reaction.create(req)
+            if not resp.success():
+                raise RuntimeError(f"code={resp.code} msg={resp.msg}")
+            # 返回的 reaction_id 用于删除
+            rid = getattr(resp.data, "reaction_id", None) if resp.data else None
+            return rid
+
+        try:
+            return _do_add()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("添加表情失败(重试后): %s", exc)
+            return None
+
+    def remove_reaction(message_id: str, reaction_id: str) -> None:
+        """删除指定消息上的表情回应。失败只记日志,不抛出。"""
+        lark = _import_lark()
+        from lark_oapi.api.im.v1 import (  # noqa: PLC0415
+            DeleteMessageReactionRequest,
+        )
+
+        def _do_remove() -> None:
+            req = (
+                DeleteMessageReactionRequest.builder()
+                .message_id(message_id)
+                .reaction_id(reaction_id)
+                .build()
+            )
+            resp = _get_api_client().im.v1.message_reaction.delete(req)
+            if not resp.success():
+                raise RuntimeError(f"code={resp.code} msg={resp.msg}")
+
+        _send_with_retry(_do_remove)
+
     _bot = FeishuBot(whitelist=whitelist,
                      send_message=send_message,
-                     reply_message=reply_message)
+                     reply_message=reply_message,
+                     add_reaction=add_reaction,
+                     remove_reaction=remove_reaction)
     _worker = FeishuWorker(send_message=send_message,
                            reply_message=reply_message,
-                           set_conversation=_bot.set_conversation)
+                           set_conversation=_bot.set_conversation,
+                           add_reaction=add_reaction,
+                           remove_reaction=remove_reaction)
 
     # worker 线程持续消费队列
     _worker_thread = threading.Thread(

@@ -14,19 +14,27 @@ from .handler import extract_message_text, should_respond
 
 logger = logging.getLogger(__name__)
 
+# 处理中 / 完成的表情(飞书消息 reaction 的 emoji_type,必须用官方英文枚举值)
+EMOJI_PROCESSING = "THINKING"  # 处理中(🤔 思考中)
+EMOJI_DONE = "DONE"  # 已完成(✅)
+
 
 class FeishuBot:
-    """接收飞书消息,校验后入队,并立即回复「处理中」。"""
+    """接收飞书消息,校验后入队,并在用户消息上加「处理中」表情。"""
 
     def __init__(
         self,
         whitelist: list,
         send_message: Callable[[str, str], Any],
         reply_message: Callable[[str, str], Any],
+        add_reaction: Callable[[str, str], Any] = None,
+        remove_reaction: Callable[[str, str], Any] = None,
     ) -> None:
         self.whitelist = list(whitelist)
         self.send_message = send_message  # (open_id, text) 单聊发送
         self.reply_message = reply_message  # (message_id, text) 群聊回复
+        self.add_reaction = add_reaction  # (message_id, emoji) -> reaction_id
+        self.remove_reaction = remove_reaction  # (message_id, reaction_id)
         self.queue: "queue.Queue[Dict[str, Any]]" = queue.Queue()
         self._conversation_map: Dict[str, int] = {}  # open_id -> conversation_id
         self._lock = threading.Lock()
@@ -35,7 +43,7 @@ class FeishuBot:
     # 事件入口(由 ws.py 的事件回调调用)
     # ------------------------------------------------------------------
     def handle_event(self, event: Dict[str, Any]) -> None:
-        """处理一条飞书消息事件。立即回复「处理中」并入队。"""
+        """处理一条飞书消息事件。在用户消息上加「处理中」表情并入队。"""
         # 调试用:无论是否放行,都记录发送者 open_id,便于首次配置白名单时获取。
         sender_open_id = (event.get("sender") or {}).get("sender_id", {}).get("open_id")
         logger.info("收到飞书消息: open_id=%s", sender_open_id)
@@ -48,30 +56,23 @@ class FeishuBot:
             return
 
         message = event.get("message") or {}
-        chat_type = message.get("chat_type")
         message_id = message.get("message_id")
         open_id = (event.get("sender") or {}).get("sender_id", {}).get("open_id")
 
-        # 立即回复「处理中」(群聊回复原消息,单聊直接发送)。
-        # 若失败只记录日志,不阻断后续入队,保证任务仍会被处理。
-        if chat_type == "group" and message_id:
+        # 在用户消息上加「处理中」表情,处理完成后由 worker 取消并改「完成」。
+        # reaction 基于 message_id,需存在 message_id 才可加。失败只记日志,不阻断入队。
+        reaction_id = None
+        if message_id and self.add_reaction is not None:
             try:
-                self.reply_message(message_id, "正在处理,请稍候…")
+                reaction_id = self.add_reaction(message_id, EMOJI_PROCESSING)
             except Exception as exc:  # noqa: BLE001
-                logger.warning("即时回复(群聊)失败: %s", exc)
-        else:
-            if not open_id:
-                logger.warning("缺少 open_id,无法发送「处理中」,任务仍入队")
-            else:
-                try:
-                    self.send_message(open_id, "正在处理,请稍候…")
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("即时回复(单聊)失败: %s", exc)
+                logger.warning("添加「处理中」表情失败: %s", exc)
 
         # 构造任务并入队
         task = self._build_task(event, text)
+        task["reaction_id"] = reaction_id
         self.queue.put(task)
-        logger.info("飞书消息已入队: open_id=%s", open_id)
+        logger.info("飞书消息已入队: open_id=%s reaction_id=%s", open_id, reaction_id)
 
     # ------------------------------------------------------------------
     # 内部
