@@ -14,3 +14,4 @@ frontend/dist/
 static/
 docs/
 记录.md
+.pytest_cache/
