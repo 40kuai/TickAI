@@ -973,8 +973,8 @@ git commit -am "chore: 安装 lark-oapi 并验证测试"
 将 `.env` 中添加:
 
 ```
-FEISHU_APP_ID=cli_a85a443600f0d00b
-FEISHU_APP_SECRET=XMqPHVVjKf6CThDLrlvaxeT67NumqJoh
+FEISHU_APP_ID=<your_feishu_app_id>
+FEISHU_APP_SECRET=<your_feishu_app_secret>
 FEISHU_OPENID_WHITELIST=<你的飞书 OpenID>
 ```
 
