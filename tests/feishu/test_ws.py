@@ -59,7 +59,7 @@ class StartWsTests(unittest.TestCase):
             "cli_x", "sec",
             event_handler=mock_lark.EventDispatcherHandler.builder.return_value
                 .register_p2_im_message_receive_v1.return_value.build.return_value,
-            log_level=mock_lark.LogLevel.INFO,
+            log_level=mock_lark.LogLevel.DEBUG,
         )
         # 已启动
         mock_lark.ws.Client.return_value.start.assert_called_once()

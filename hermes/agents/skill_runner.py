@@ -31,8 +31,12 @@ class SkillExecutionError(RuntimeError):
     """Raised when a skill cannot be executed."""
 
 
-# Default skill-related tools (K8s read-only). The LLM uses these to gather data.
-SKILL_TOOLSETS = {"k8s"}
+# Tools available to a skill's internal LLM.
+# - "k8s": Kubernetes read-only tools
+# - "monitoring": Prometheus/ARMS query tools (e.g. prometheus_service_health)
+#   Some skills (diagnose_prometheus_anomaly) analyze metrics from Prometheus
+#   rather than the cluster, so they need the monitoring toolset too.
+SKILL_TOOLSETS = {"k8s", "monitoring"}
 
 
 # Language directives appended to the system prompt. The LLM is asked to
@@ -78,7 +82,7 @@ class SkillRunner(BaseAgent):
         self,
         llm_client: Any,
         skills_dir: str | Path = SKILLS_DIR,
-        max_tool_rounds: int = 5,
+        max_tool_rounds: int = 15,
         language: str = "en",
     ):
         self.llm = llm_client
@@ -146,7 +150,12 @@ class SkillRunner(BaseAgent):
             f"- You have read-only access to the cluster via the provided tools.\n"
             f"- NEVER call any non-read tool — only the tools provided.\n"
             f"- Focus on the skill's specific analysis goal.\n"
-            f"- Provide a concise summary of findings when done.\n\n"
+            f"- Provide a concise summary of findings when done.\n"
+            f"- You have a LIMITED number of tool-call rounds. Be efficient:\n"
+            f"  - If you need multiple queries, issue them in ONE round as parallel tool calls.\n"
+            f"  - Stop querying as soon as you have enough data to answer; do NOT re-query the same data.\n"
+            f"  - As soon as you can state the conclusion (even partial), produce the final text answer —\n"
+            f"    do NOT keep calling tools to make the report 'complete'.\n\n"
             f"{LANGUAGE_DIRECTIVES[lang]}"
         )
         user_message = (
@@ -199,7 +208,21 @@ class SkillRunner(BaseAgent):
                     "tool_call_id": tc["id"],
                     "content": result,
                 })
-        return "(max tool rounds reached without a final answer)"
+        # 轮次耗尽兜底:强制 LLM 基于已有 tool 结果给出总结,而非返回空串
+        try:
+            force_summary = [
+                {"role": "system", "content": (
+                    "You have reached the tool-call limit. Stop calling tools. "
+                    "Produce a final summary using ONLY the tool results already obtained; "
+                    "if some checks were not completed, state that explicitly. "
+                    "Do NOT call any tools."
+                )},
+            ] + messages[-8:]  # 只回看最近的上下文,避免超长
+            resp = self.llm.chat(messages=force_summary, tools=[])
+            text = resp["choices"][0]["message"].get("content") or ""
+            return text.strip() or "(max tool rounds reached without a final answer)"
+        except Exception:  # noqa: BLE001
+            return "(max tool rounds reached without a final answer)"
 
     def _persist(
         self,

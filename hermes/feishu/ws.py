@@ -72,6 +72,10 @@ def build_event_handler(bot: FeishuBot):
 def _on_message(bot: FeishuBot, data) -> None:
     """事件回调:把 lark 事件转成 dict 交给 bot 分发。"""
     event = data.event
+    logger.debug("飞书收到消息事件: chat_type=%s type=%s msg_id=%s",
+                 getattr(event.message, "chat_type", None) if event.message else None,
+                 getattr(event.message, "message_type", None) if event.message else None,
+                 getattr(event.message, "message_id", None) if event.message else None)
     event_dict = {
         "sender": {
             "sender_id": {
@@ -213,7 +217,7 @@ def _start_ws(app_id: str, app_secret: str, bot: FeishuBot) -> None:
             app_id,
             app_secret,
             event_handler=event_handler,
-            log_level=lark.LogLevel.INFO,
+            log_level=lark.LogLevel.DEBUG,
         )
         _ws_client = client
         logger.info("飞书长连接已启动")

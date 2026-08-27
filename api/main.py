@@ -8,6 +8,7 @@ Run with:
 """
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
@@ -55,8 +56,14 @@ app.include_router(history_router)
 # ---------------------------------------------------------------------------
 @app.on_event("startup")
 def startup() -> None:
+    # 统一日志:后端与飞书日志落到 logs/app.log(按天轮转,保留 7 天)
+    from hermes.core.logging import setup_logging
+
+    setup_logging(level=logging.INFO)
     init_db()
     init_default_user()
+    # 飞书机器人的运行日志设为 INFO,便于观察消息收发与错误
+    logging.getLogger("hermes.feishu").setLevel(logging.INFO)
     # 惰性导入:仅在应用真正启动时才加载飞书模块(lark-oapi),避免模块加载期硬依赖
     from hermes.feishu.ws import start_feishu_bot
 
