@@ -12,3 +12,5 @@ node_modules/
 frontend/node_modules/
 frontend/dist/
 static/
+docs/
+记录.md
