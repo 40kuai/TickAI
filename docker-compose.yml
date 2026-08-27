@@ -1,0 +1,35 @@
+# ============================================================
+# TickAI docker-compose (Vue 3 + FastAPI)
+# ============================================================
+services:
+  tickai:
+    build: .
+    container_name: tickai
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - TOKENHUB_API_KEY=${TOKENHUB_API_KEY}
+      - TOKENHUB_MODEL=${TOKENHUB_MODEL:-deepseek-v4-flash}
+      - TOKENHUB_BASE_URL=${TOKENHUB_BASE_URL:-https://tokenhub.tencentmaas.com/plan/v3}
+      - OPS_DB_PATH=${OPS_DB_PATH:-data/opsticket.db}
+      - ADMIN_INITIAL_PASSWORD=${ADMIN_INITIAL_PASSWORD:-}
+      - JWT_SECRET=${JWT_SECRET:-}
+    volumes:
+      - tickai_data:/app/data
+    networks:
+      - tickai_net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/auth/me"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  tickai_data:
+    driver: local
+
+networks:
+  tickai_net:
+    driver: bridge
