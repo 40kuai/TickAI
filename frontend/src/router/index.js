@@ -41,6 +41,12 @@ const routes = [
         name: 'tools',
         component: () => import('@/views/Tools.vue'),
         meta: { title: '工具浏览' }
+      },
+      {
+        path: 'skills',
+        name: 'skills',
+        component: () => import('@/views/Skills.vue'),
+        meta: { title: 'Skills 技能' }
       }
     ]
   },
