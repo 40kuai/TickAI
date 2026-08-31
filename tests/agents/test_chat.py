@@ -14,7 +14,8 @@ os.environ["TOKENHUB_API_KEY"] = "sk-test-dummy"
 # audit removed - was hermes.opslib.audit (legacy)
 from hermes.data import db, models  # noqa: E402
 from hermes.agents import chat as llm_agent  # noqa: E402
-from hermes.data.models import Conversation, RunRecord, Server  # noqa: E402
+from hermes.data.models import Conversation, RunRecord, Server, SSHCredential  # noqa: E402
+from hermes.tools.registry import registry  # noqa: E402
 
 
 def _wipe():
@@ -23,11 +24,17 @@ def _wipe():
         s.query(RunRecord).delete()
         s.query(Conversation).delete()
         s.query(Server).delete()
+        s.query(SSHCredential).delete()
 
 
 def _add_server(name="web-01"):
     with db.session_scope() as s:
-        s.add(models.Server(name=name, host="10.0.0.1", username="root", password="x"))
+        cred = models.SSHCredential(
+            name=f"{name}-cred", username="root", password="x", is_default=True,
+        )
+        s.add(cred)
+        s.flush()
+        s.add(models.Server(name=name, host="10.0.0.1", ssh_credential_id=cred.id))
     with db.session_scope() as s:
         return s.query(Server).filter_by(name=name).one()
 
@@ -130,30 +137,29 @@ class ChatToolCallTests(unittest.TestCase):
 
     def test_calls_tool_and_persists_run(self):
         # Round 1: LLM calls list_servers
-        # Round 2: LLM calls check_disk_on_server
+        # Round 2: LLM calls check_disk_usage
         # Round 3: LLM gives final answer
         r1 = _make_tool_response("list_servers", {}, "call_1")
-        r2 = _make_tool_response("check_disk_on_server", {"server_id": self.s1.id}, "call_2")
+        r2 = _make_tool_response("check_disk_usage", {"server_id": self.s1.id}, "call_2")
         r3 = _make_text_response("Web-01 disk looks fine.")
         client = _fake_client([r1, r2, r3])
 
-        with patch("hermes.run_check.ssh_runner.run_command") as mock_run:
-            from hermes.data.models import RunRecord as RR
-            mock_run.return_value = RR(
-                id=1, server_id=self.s1.id, command="df -Th",
-                status="success", exit_code=0, duration_ms=100,
-                structured_result=json.dumps({"mounts": [], "summary": {"total_mounts": 0}}),
-                triggered_by="llm_tool_call",
-            )
+        fake_result = json.dumps({
+            "mounts": [{"mount": "/", "use_pct": 50}],
+            "summary": {"total_mounts": 1, "warning_count": 0, "critical_count": 0},
+        })
+        # chat.py dispatches through the shared registry singleton; patch its
+        # dispatch so both list_servers and check_disk_usage return fake data.
+        with patch.object(registry, "dispatch", return_value=fake_result) as mock_dispatch:
             result = llm_agent.chat("check web-01", client=client)
 
         self.assertEqual(result["reply"], "Web-01 disk looks fine.")
         self.assertEqual(result["rounds"], 3)
         self.assertEqual(len(result["tool_calls"]), 2)
         self.assertEqual(result["tool_calls"][0]["name"], "list_servers")
-        self.assertEqual(result["tool_calls"][1]["name"], "check_disk_on_server")
-        # mock_run was called once
-        mock_run.assert_called_once()
+        self.assertEqual(result["tool_calls"][1]["name"], "check_disk_usage")
+        # both tool calls went through registry.dispatch
+        self.assertEqual(mock_dispatch.call_count, 2)
         # total_runs was incremented
         with db.session_scope() as s:
             c = s.get(Conversation, result["conversation_id"])

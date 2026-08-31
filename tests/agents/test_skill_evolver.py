@@ -85,13 +85,13 @@ class SkillEvolverUnitTests(unittest.TestCase):
 
     def test_evolver_produces_new_content(self):
         evolver = SkillEvolver(llm_client=self.mock_llm, skills_dir=self.tmpdir)
-        new_content = evolver.evolve("evolve_me")
+        new_content = evolver.evolve_skill("evolve_me")
         self.assertIn("Improved", new_content)
         self.assertIn("check_k8s_events", new_content)
 
     def test_evolver_passes_history_to_llm(self):
         evolver = SkillEvolver(llm_client=self.mock_llm, skills_dir=self.tmpdir)
-        evolver.evolve("evolve_me")
+        evolver.evolve_skill("evolve_me")
         # LLM was called
         self.mock_llm.chat.assert_called()
         # Check messages contain the outcomes
@@ -103,14 +103,14 @@ class SkillEvolverUnitTests(unittest.TestCase):
 
     def test_evolver_saves_new_content(self):
         evolver = SkillEvolver(llm_client=self.mock_llm, skills_dir=self.tmpdir)
-        evolver.evolve("evolve_me", save=True)
+        evolver.evolve_skill("evolve_me", save=True)
         # File should be updated
         updated = (Path(self.tmpdir) / "evolve_me.md").read_text()
         self.assertIn("Improved", updated)
 
     def test_evolver_records_version(self):
         evolver = SkillEvolver(llm_client=self.mock_llm, skills_dir=self.tmpdir)
-        evolver.evolve("evolve_me", save=True)
+        evolver.evolve_skill("evolve_me", save=True)
         with db.session_scope() as s:
             versions = s.query(SkillVersion).filter_by(skill_name="evolve_me").all()
             # At least 2: initial + evolved
@@ -122,13 +122,13 @@ class SkillEvolverUnitTests(unittest.TestCase):
     def test_evolver_skill_not_found(self):
         evolver = SkillEvolver(llm_client=self.mock_llm, skills_dir=self.tmpdir)
         with self.assertRaises(EvolutionError):
-            evolver.evolve("nonexistent_skill")
+            evolver.evolve_skill("nonexistent_skill")
 
     def test_evolver_handles_llm_error(self):
         self.mock_llm.chat.side_effect = RuntimeError("LLM down")
         evolver = SkillEvolver(llm_client=self.mock_llm, skills_dir=self.tmpdir)
         with self.assertRaises(EvolutionError):
-            evolver.evolve("evolve_me")
+            evolver.evolve_skill("evolve_me")
 
     def test_evolver_with_no_history_returns_original(self):
         # Make a new skill with no outcomes
@@ -136,7 +136,7 @@ class SkillEvolverUnitTests(unittest.TestCase):
                    skills_dir=self.tmpdir)
         evolver = SkillEvolver(llm_client=self.mock_llm, skills_dir=self.tmpdir)
         # With no feedback, evolver should still consult LLM but may return same
-        new_content = evolver.evolve("fresh")
+        new_content = evolver.evolve_skill("fresh")
         # The mock LLM will return its canned response
         self.assertIsInstance(new_content, str)
         self.assertGreater(len(new_content), 0)
@@ -158,7 +158,7 @@ class SkillEvolverUnitTests(unittest.TestCase):
             }]
         }
         evolver = SkillEvolver(llm_client=self.mock_llm, skills_dir=self.tmpdir)
-        new_content = evolver.evolve("evolve_me")
+        new_content = evolver.evolve_skill("evolve_me")
         self.assertIn("name: evolve_me", new_content)
         self.assertIn("Better instructions", new_content)
 

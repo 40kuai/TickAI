@@ -10,7 +10,7 @@ Path("/tmp/opsticket_test").mkdir(parents=True, exist_ok=True)
 
 from hermes.data import db, models  # noqa: E402
 from hermes.tools.ssh import runner as ssh_runner  # noqa: E402
-from hermes.data.models import RunRecord, Server  # noqa: E402
+from hermes.data.models import RunRecord, Server, SSHCredential  # noqa: E402
 
 
 def _wipe():
@@ -18,18 +18,24 @@ def _wipe():
     with db.session_scope() as s:
         s.query(RunRecord).delete()
         s.query(Server).delete()
+        s.query(SSHCredential).delete()
 
 
 def _add_server(name="web-01"):
     with db.session_scope() as s:
-        s.add(models.Server(name=name, host="10.0.0.1", username="root", password="x"))
+        cred = models.SSHCredential(
+            name=f"{name}-cred", username="root", password="x", port=22, is_default=True,
+        )
+        s.add(cred)
+        s.flush()
+        s.add(models.Server(name=name, host="10.0.0.1", ssh_credential_id=cred.id))
     with db.session_scope() as s:
         return s.query(Server).filter_by(name=name).one()
 
 
 def _mock_handler(return_value: str):
     """Return a context manager that patches check_disk_handler."""
-    return patch("hermes.ssh_runner.check_disk_handler",
+    return patch("hermes.tools.ssh.runner.check_disk_handler",
                  return_value=return_value)
 
 
@@ -151,7 +157,7 @@ class CheckDiskHandlerIntegrationTests(unittest.TestCase):
             captured.update(args)
             return json.dumps({"mounts": [], "summary": {}})
 
-        with patch("hermes.ssh_runner.check_disk_handler", side_effect=fake_handler):
+        with patch("hermes.tools.ssh.runner.check_disk_handler", side_effect=fake_handler):
             ssh_runner.run_command(self.server.id, "df -Th", "user_button")
 
         self.assertEqual(captured["host"], "10.0.0.1")

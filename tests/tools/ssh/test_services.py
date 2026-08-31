@@ -8,10 +8,10 @@ from unittest.mock import patch
 os.environ.setdefault("OPS_DB_PATH", "/tmp/opsticket_test/test.db")
 Path("/tmp/opsticket_test").mkdir(parents=True, exist_ok=True)
 
-# Importing the module has the side-effect of registering the new tools.
-from hermes.tools.ssh.services import system_tools  # noqa: F401, E402
+# Importing the module has the side-effect of registering the tools.
+import hermes.tools.ssh.services  # noqa: F401, E402
 from hermes.data import db, models  # noqa: E402
-from hermes.data.models import RunRecord, Server  # noqa: E402
+from hermes.data.models import RunRecord, Server, SSHCredential  # noqa: E402
 from hermes.tools.registry import registry  # noqa: E402
 
 
@@ -20,12 +20,25 @@ def _wipe():
     with db.session_scope() as s:
         s.query(RunRecord).delete()
         s.query(Server).delete()
+        s.query(SSHCredential).delete()
 
 
 def _add_server(name="web-01", password="secret123"):
     with db.session_scope() as s:
-        s.add(models.Server(name=name, host="10.0.0.1", username="root",
-                            password=password, tags="web,prod"))
+        cred = models.SSHCredential(
+            name=f"{name}-cred",
+            username="root",
+            password=password,
+            is_default=True,
+        )
+        s.add(cred)
+        s.flush()
+        s.add(models.Server(
+            name=name,
+            host="10.0.0.1",
+            ssh_credential_id=cred.id,
+            tags="web,prod",
+        ))
     with db.session_scope() as s:
         return s.query(Server).filter_by(name=name).one()
 
@@ -85,7 +98,7 @@ class CheckResourcesToolTests(unittest.TestCase):
         self.assertIn("not found", data["error"])
 
     def test_calls_ssh_and_returns_result(self):
-        with patch("hermes.system_tools.check_resources_handler",
+        with patch("hermes.tools.ssh.services.check_resources_handler",
                     return_value=_fake_resources_result()):
             out = registry.dispatch("check_resources_on_server",
                                      {"server_id": self.server.id})
@@ -95,7 +108,7 @@ class CheckResourcesToolTests(unittest.TestCase):
         self.assertEqual(data["pressure_level"], "low")
 
     def test_does_not_expose_password(self):
-        with patch("hermes.system_tools.check_resources_handler",
+        with patch("hermes.tools.ssh.services.check_resources_handler",
                     return_value=_fake_resources_result()):
             out = registry.dispatch("check_resources_on_server",
                                      {"server_id": self.server.id})
@@ -104,7 +117,7 @@ class CheckResourcesToolTests(unittest.TestCase):
         self.assertNotIn("password", json.dumps(data))
 
     def test_persists_audit_with_llm_source(self):
-        with patch("hermes.system_tools.check_resources_handler",
+        with patch("hermes.tools.ssh.services.check_resources_handler",
                     return_value=_fake_resources_result()):
             registry.dispatch("check_resources_on_server",
                                {"server_id": self.server.id})
@@ -117,7 +130,7 @@ class CheckResourcesToolTests(unittest.TestCase):
         self.assertIn("check_resources_on_server", runs[0].triggered_context)
 
     def test_ssh_failure_persists_ssh_error(self):
-        with patch("hermes.system_tools.check_resources_handler",
+        with patch("hermes.tools.ssh.services.check_resources_handler",
                     return_value=json.dumps({"error": "SSH error: Connection refused"})):
             out = registry.dispatch("check_resources_on_server",
                                      {"server_id": self.server.id})
@@ -141,7 +154,7 @@ class ListServicesToolTests(unittest.TestCase):
         self.assertIn("error", data)
 
     def test_calls_ssh_and_returns_result(self):
-        with patch("hermes.system_tools.list_services_handler",
+        with patch("hermes.tools.ssh.services.list_services_handler",
                     return_value=_fake_services_result()):
             out = registry.dispatch("list_services_on_server",
                                      {"server_id": self.server.id})
@@ -156,7 +169,7 @@ class ListServicesToolTests(unittest.TestCase):
         self.assertEqual(abnormal[0]["name"], "myapp")
 
     def test_does_not_expose_password(self):
-        with patch("hermes.system_tools.list_services_handler",
+        with patch("hermes.tools.ssh.services.list_services_handler",
                     return_value=_fake_services_result()):
             out = registry.dispatch("list_services_on_server",
                                      {"server_id": self.server.id})
@@ -164,7 +177,7 @@ class ListServicesToolTests(unittest.TestCase):
         self.assertNotIn("password", json.dumps(data))
 
     def test_persists_audit_with_llm_source(self):
-        with patch("hermes.system_tools.list_services_handler",
+        with patch("hermes.tools.ssh.services.list_services_handler",
                     return_value=_fake_services_result()):
             registry.dispatch("list_services_on_server",
                                {"server_id": self.server.id})
@@ -175,7 +188,7 @@ class ListServicesToolTests(unittest.TestCase):
         self.assertEqual(runs[0].triggered_by, "llm_tool_call")
 
     def test_ssh_failure_persists_ssh_error(self):
-        with patch("hermes.system_tools.list_services_handler",
+        with patch("hermes.tools.ssh.services.list_services_handler",
                     return_value=json.dumps({"error": "SSH error: timeout"})):
             out = registry.dispatch("list_services_on_server",
                                      {"server_id": self.server.id})
