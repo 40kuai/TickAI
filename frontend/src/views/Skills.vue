@@ -1,10 +1,17 @@
 <script setup>
 import { ref, onMounted } from 'vue'
+import { marked } from 'marked'
 import api from '@/api'
 
 const skills = ref([])
 const loading = ref(false)
 const errorMsg = ref('')
+
+// 详情弹窗状态
+const detailVisible = ref(false)
+const detailLoading = ref(false)
+const detail = ref(null)
+const detailError = ref('')
 
 // 触发器标签映射
 const TRIGGER_LABELS = {
@@ -51,6 +58,38 @@ async function loadSkills() {
   }
 }
 
+// 渲染 Markdown
+function renderMarkdown(content) {
+  if (!content) return ''
+  try {
+    return marked(content)
+  } catch {
+    return content
+  }
+}
+
+// 打开详情
+async function openDetail(skill) {
+  detail.value = null
+  detailError.value = ''
+  detailVisible.value = true
+  detailLoading.value = true
+  try {
+    const res = await api.get(`/skills/${encodeURIComponent(skill.name)}`)
+    detail.value = res.data
+  } catch (err) {
+    detailError.value = err.response?.data?.detail || '加载技能详情失败'
+  } finally {
+    detailLoading.value = false
+  }
+}
+
+function closeDetail() {
+  detailVisible.value = false
+  detail.value = null
+  detailError.value = ''
+}
+
 onMounted(loadSkills)
 </script>
 
@@ -79,6 +118,31 @@ onMounted(loadSkills)
         </div>
         <p class="skill-desc">{{ skill.description || '暂无描述' }}</p>
         <div class="skill-path" :title="skill.path">{{ skill.path }}</div>
+        <div class="skill-actions">
+          <button class="btn btn-outline btn-sm" @click="openDetail(skill)">查看详情</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 详情弹窗 -->
+    <div v-if="detailVisible" class="modal-overlay" @click.self="closeDetail">
+      <div class="modal-box detail-modal">
+        <div class="modal-header">
+          <h3>{{ detail?.name || '技能详情' }}</h3>
+          <button class="modal-close" @click="closeDetail">×</button>
+        </div>
+        <div class="modal-body">
+          <div v-if="detailLoading" class="state-tip">加载中…</div>
+          <div v-else-if="detailError" class="state-tip error">{{ detailError }}</div>
+          <div v-else-if="detail" class="detail-content">
+            <div class="detail-meta">
+              <span class="badge badge-gray">{{ triggerLabel(detail.trigger) }}</span>
+              <span class="badge" :class="severityBadge(detail.severity)">{{ severityLabel(detail.severity) }}</span>
+            </div>
+            <p class="detail-desc">{{ detail.description || '暂无描述' }}</p>
+            <div class="detail-body markdown-body" v-html="renderMarkdown(detail.body)"></div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -160,6 +224,10 @@ onMounted(loadSkills)
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.skill-actions {
+  margin-top: auto;
+  padding-top: 10px;
+}
 
 /* 严重级别徽章 */
 .badge-warning {
@@ -173,5 +241,137 @@ onMounted(loadSkills)
 .badge-info {
   background: rgba(14, 165, 233, 0.12);
   color: #0284c7;
+}
+
+/* 详情弹窗 */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.modal-box {
+  background: var(--color-card, #fff);
+  border-radius: var(--radius-md, 10px);
+  box-shadow: var(--shadow-lg, 0 10px 30px rgba(0,0,0,0.25));
+  width: 100%;
+  max-width: 760px;
+  max-height: 82vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.detail-modal {
+  width: 760px;
+}
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--color-border, #eee);
+  flex-shrink: 0;
+}
+.modal-header h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+.modal-close {
+  border: none;
+  background: none;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--color-text-secondary);
+  padding: 0 4px;
+}
+.modal-close:hover {
+  color: var(--color-danger);
+}
+.modal-body {
+  padding: 20px;
+  overflow-y: auto;
+}
+.detail-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.detail-meta {
+  display: flex;
+  gap: 6px;
+}
+.detail-desc {
+  margin: 0;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+}
+.detail-body {
+  border-top: 1px solid var(--color-border, #eee);
+  padding-top: 14px;
+}
+.markdown-body :deep(h1),
+.markdown-body :deep(h2),
+.markdown-body :deep(h3) {
+  margin: 12px 0 6px;
+}
+.markdown-body :deep(p) {
+  margin: 6px 0;
+  line-height: 1.7;
+}
+.markdown-body :deep(ul),
+.markdown-body :deep(ol) {
+  margin: 6px 0;
+  padding-left: 20px;
+}
+.markdown-body :deep(li) {
+  margin: 3px 0;
+}
+.markdown-body :deep(code) {
+  background: rgba(0, 0, 0, 0.06);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 12px;
+}
+.markdown-body :deep(pre) {
+  background: #1e293b;
+  color: #e2e8f0;
+  border-radius: 8px;
+  padding: 12px;
+  overflow-x: auto;
+  margin: 8px 0;
+}
+.markdown-body :deep(pre code) {
+  background: none;
+  color: inherit;
+  padding: 0;
+}
+.markdown-body :deep(table) {
+  border-collapse: collapse;
+  margin: 8px 0;
+  width: 100%;
+  font-size: 13px;
+}
+.markdown-body :deep(th),
+.markdown-body :deep(td) {
+  border: 1px solid var(--color-border, #e5e7eb);
+  padding: 6px 10px;
+  text-align: left;
+}
+.markdown-body :deep(th) {
+  background: rgba(0, 0, 0, 0.03);
+  font-weight: 600;
+}
+.markdown-body :deep(blockquote) {
+  margin: 8px 0;
+  padding-left: 12px;
+  border-left: 3px solid var(--color-border, #ddd);
+  color: var(--color-text-secondary);
 }
 </style>

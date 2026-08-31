@@ -28,6 +28,8 @@ ALLOWED_NON_TOOL_REFS = {
     "cluster_context", "conditions", "container_type", "context", "hours",
     "kubectl", "lastState", "limits", "memory_limit", "namespace", "note",
     "reason", "restartCount", "system",
+    # kubectl 变更类动词（只读纪律声明中引用，非工具）
+    "create", "delete", "apply", "scale", "exec", "edit",
 }
 
 
@@ -94,6 +96,19 @@ class ContentCompletenessTests(unittest.TestCase):
     def test_output_language_chinese(self):
         self.assertIn("中文", self.body)
 
+    def test_scoped_to_k8s_scenarios(self):
+        """Usage must be limited to k8s cluster / pod OOM analysis."""
+        for kw in ("k8s", "集群", "Pod"):
+            self.assertIn(kw, self.body, f"技能必须限定 k8s 场景关键词 {kw}")
+
+    def test_mentions_kubeconfig_precheck(self):
+        self.assertIn("kubeconfig", self.body)
+
+    def test_reinforces_read_only(self):
+        """All operations are read-only kubectl get; no mutating ops."""
+        self.assertIn("kubectl get", self.body)
+        self.assertIn("绝不", self.body)
+
 
 class ToolReferencesRealTests(unittest.TestCase):
     """Every backtick-quoted tool name in the body must be a real registered tool."""
@@ -115,6 +130,7 @@ class ToolReferencesRealTests(unittest.TestCase):
 
     def test_references_expected_tools(self):
         refs = _tool_refs_in_body(self.body)
+        self.assertIn("list_k8s_contexts", refs)
         self.assertIn("check_k8s_events", refs)
         self.assertIn("check_k8s_pods", refs)
         self.assertIn("check_k8s_nodes", refs)

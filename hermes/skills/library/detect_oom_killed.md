@@ -1,10 +1,8 @@
 ---
 name: detect_oom_killed
 description: >-
-  找出被 Linux OOMKiller 杀死的 Pod（OOMKilled），定位根因（缺少内存 limit、
-  limit 过小、内存泄漏、节点内存压力），并为每个发现给出具体的修复建议。
-  当用户询问"哪些 Pod 因内存被杀 / 崩溃 / 吃内存 / OOM"、或要求巡检 OOMKilled
-  状态时使用。
+  分析 k8s 集群中因 OOMKilled 被杀死的 Pod（仅限 k8s/Pod 场景），定位根因
+  （缺内存 limit、limit 过小、内存泄漏、节点内存压力）并给出修复建议。
 trigger: user_initiated
 severity: warning
 ---
@@ -15,24 +13,30 @@ severity: warning
 
 找出最近时间范围内被 **OOMKilled** 的 Pod，定位每个 Pod 的根因
 （**缺少内存 limit / limit 过小 / 内存泄漏 / 节点内存压力**），
-并为每个情况给出**具体、可执行**的修复建议。本 skill 严格只读。
+并为每个情况给出**具体、可执行**的修复建议。本 skill 严格只读，
+**仅限 k8s 集群 / Pod 场景使用，全程不会对集群产生任何影响。**
 
 ## When to use
 
-用户问法含以下任一语义时立即使用本 skill：
+**仅在用户提及 k8s 分析场景时使用**——即用户问法涉及 k8s 集群、Pod、
+namespace、Deployment 等 k8s 语境，且语义与内存被杀 / OOM 相关：
 
-- "哪些 Pod 因为内存被杀 / OOM / OOMKilled？"
-- "有什么 Pod 在崩溃 / 反复重启？"
+- "k8s 里哪些 Pod 因为内存被杀 / OOM / OOMKilled？"
+- "集群里有什么 Pod 在崩溃 / 反复重启？"
 - "这个 Pod 为什么被杀了 / 为什么 OutOfMemory？"
-- "集群里谁在吃内存？"
-- 用户明确要求检查 OOMKilled 状态或内存 limit 配置
+- "k8s 集群里谁在吃内存？"
+- 用户明确要求检查 k8s Pod 的 OOMKilled 状态或内存 limit 配置
 
-不要因为问法口语化（"咋回事 / 怎么一直重启"）而漏用本 skill。
+**不要因为问法口语化（"咋回事 / 怎么一直重启"）而漏用本 skill**，前提仍是 k8s 语境。
+
+**排除场景（不使用本 skill）**：非 k8s 场景——如询问某台物理机/服务器内存占用、
+普通 Linux 进程 OOM、非 k8s 平台的容器内存问题等，应使用其它工具而非本 skill。
 
 ## 可用工具（全部只读，k8s toolset）
 
 | 阶段 | 工具 | 用法 |
 |---|---|---|
+| 0 检查环境 | `list_k8s_contexts` | 确认 kubeconfig 配置正常、存在可用 context |
 | 1 拉事件 | `check_k8s_events` | 按最近时间返回 Warning 事件，找 `reason: "OOMKilling"` |
 | 2 查 Pod | `check_k8s_pods` | 查 Pod 的 `limits.memory`、`restartCount`、`lastState.terminated.reason` |
 | 3 查节点 | `check_k8s_nodes` | 查节点 `conditions` 中的 `MemoryPressure`（系统级 OOM 风险） |
@@ -47,8 +51,13 @@ severity: warning
 
 用户没有指定时，一律使用默认值，不要凭空猜测。
 
-## 推荐流程（通常 3-4 次调用）
+## 推荐流程
+（通常 3-4 次调用）
 
+0. **前置检查 kubeconfig**：先调用 `list_k8s_contexts` 确认 kubeconfig 配置正常、
+   存在可用 context。若用户指定了 `context=<ctx>`，确认该 context 存在；不存在则
+   提示用户并回退到当前上下文。若 kubeconfig 异常 / 无任何可用 context，直接返回
+   "kubeconfig 不可用，无法执行 OOM 分析"，**不要继续后续查询**。
 1. **拉事件**：调用 `check_k8s_events(context=<ctx>)`，从结果中筛选
    `reason` 为 `OOMKilling` 的事件。提取：namespace、Pod 名、容器名、时间戳。
    若按时间范围筛选，只保留最近 `hours` 小时内的事件。
@@ -109,6 +118,10 @@ category / 时间戳）保持原样：
 - **事件为空 / 工具超时**：如实说明"无数据/查询失败"，不要对空结果下结论。
 
 ## 不要做什么
+
+本 skill **只读纪律**：分析过程中只调用 `kubectl get`（事件 / Pod / 节点）类只读查询，
+**绝不**执行 `create` / `delete` / `apply` / `scale` / `exec` / `edit` 等任何会改变集群状态的操作，
+全程不会对集群产生任何影响。
 
 - **不要**把重启 Pod 当修复方案——k8s 会自动重启，那只是推迟下一次 OOM。
 - **不要**把删除 Pod 当修复方案——同理。
