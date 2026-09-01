@@ -8,12 +8,13 @@
 """
 from __future__ import annotations
 
-import os
 from typing import List, Tuple
+
+from hermes.config import settings
 
 
 def _split_csv(key: str) -> List[str]:
-    raw = os.environ.get(key, "")
+    raw = settings.get(key, "")
     return [x.strip() for x in raw.split(",") if x.strip()]
 
 
@@ -45,14 +46,14 @@ DROPCACHES_MODES_WHITELIST: List[str] = _split_csv("SELFHEAL_DROPCACHES_MODES_WH
 
 # 业务高峰期（进程重启在此区间强制高危）
 PEAK_HOURS: List[Tuple[int, int]] = _parse_hours(
-    os.environ.get("SELFHEAL_PEAK_HOURS", "9-18")
+    settings.get("SELFHEAL_PEAK_HOURS", "9-18")
 )
 
 
 def reload_config() -> None:
-    """重新读取环境变量（供测试/运行时配置变更）。"""
+    """重新读取配置（环境变量 > .env > 默认，供测试/运行时配置变更）。"""
     global SERVICE_WHITELIST, LOG_PATH_WHITELIST, DROPCACHES_MODES_WHITELIST, PEAK_HOURS
     SERVICE_WHITELIST = _split_csv("SELFHEAL_SERVICE_WHITELIST")
     LOG_PATH_WHITELIST = _split_csv("SELFHEAL_LOG_PATH_WHITELIST")
     DROPCACHES_MODES_WHITELIST = _split_csv("SELFHEAL_DROPCACHES_MODES_WHITELIST")
-    PEAK_HOURS = _parse_hours(os.environ.get("SELFHEAL_PEAK_HOURS", "9-18"))
+    PEAK_HOURS = _parse_hours(settings.get("SELFHEAL_PEAK_HOURS", "9-18"))
