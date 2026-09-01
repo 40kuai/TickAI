@@ -22,6 +22,9 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.PEAK_HOURS, [(9, 18)])
 
     def test_env_overrides_service_whitelist(self):
+        # patch.dict 退出时只恢复环境变量，不恢复模块全局变量，
+        # 因此在测试结束后重新加载配置，恢复模块级状态，避免污染其他测试。
+        self.addCleanup(config.reload_config)
         with patch.dict(os.environ, {"SELFHEAL_SERVICE_WHITELIST": "nginx,mysql"}, clear=False):
             config.reload_config()
             self.assertIn("nginx", config.SERVICE_WHITELIST)
