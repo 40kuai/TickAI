@@ -1,7 +1,7 @@
 """API 层自愈闭环测试 (KR2 Task 7).
 
 覆盖 /api/selfheal 路由:
-- GET  /scenes                       3 场景元数据
+- GET  /scenes                       4 场景元数据
 - POST /run                          高危 disk_clean → pending
 - GET  /actions                      status_filter + created_at 倒序
 - POST /actions/{id}/approve         重渲染→执行→验证

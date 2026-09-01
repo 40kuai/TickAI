@@ -106,9 +106,8 @@ def run_selfheal(req: SelfHealRunRequest, user: User = Depends(get_current_user)
 def scan_log(req: ScanLogRequest, user: User = Depends(get_current_user)):
     """触发只读清单扫描(通道二数据源)。"""
     from hermes.tools.selfheal.inventory import scan_log_cleanup_handler
-    import json as _json
     raw = scan_log_cleanup_handler({"server_id": req.server_id})
-    parsed = _json.loads(raw)
+    parsed = json.loads(raw)
     if "error" in parsed:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=parsed["error"])
     return parsed
