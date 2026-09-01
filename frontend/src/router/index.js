@@ -47,6 +47,12 @@ const routes = [
         name: 'skills',
         component: () => import('@/views/Skills.vue'),
         meta: { title: 'Skills 技能' }
+      },
+      {
+        path: 'selfheal',
+        name: 'selfheal',
+        component: () => import('@/views/SelfHeal.vue'),
+        meta: { title: '自愈中心' }
       }
     ]
   },

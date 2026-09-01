@@ -318,7 +318,7 @@ class SelfHealAction(Base):
     target: Mapped[str] = mapped_column(String(255))     # 服务名 / 挂载点 / drop_caches 模式
     severity: Mapped[str] = mapped_column(String(8))     # low / high
     action_name: Mapped[str] = mapped_column(String(64)) # 模板标识
-    rendered_command: Mapped[str] = mapped_column(Text)  # 渲染后精确命令(审计留痕)
+    rendered_command: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # 渲染后精确命令(审计留痕); 渲染失败为 None
     status: Mapped[str] = mapped_column(String(24), default="pending")
     # pending / approved / rejected / executing / executed / failed / verified / verification_failed
     triggered_by: Mapped[str] = mapped_column(String(24), default="user")  # user / dialog
@@ -327,6 +327,7 @@ class SelfHealAction(Base):
     executed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     execution_result: Mapped[Optional[str]] = mapped_column(Text, nullable=True)    # JSON
     verification_result: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON
+    grade_reasons: Mapped[Optional[str]] = mapped_column(Text, nullable=True)        # 分级理由 JSON
     success: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
@@ -354,6 +355,7 @@ class SelfHealAction(Base):
             "executed_at": self.executed_at.isoformat() if self.executed_at else None,
             "execution_result": self.execution_result,
             "verification_result": self.verification_result,
+            "grade_reasons": self.grade_reasons,
             "success": self.success,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }

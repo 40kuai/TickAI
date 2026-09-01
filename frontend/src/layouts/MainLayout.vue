@@ -35,7 +35,8 @@ const menuItems = [
   { name: 'chat', path: '/chat', label: 'AI 对话', icon: '✦' },
   { name: 'history', path: '/history', label: '历史记录', icon: '⟳' },
   { name: 'tools', path: '/tools', label: '工具', icon: '⚒' },
-  { name: 'skills', path: '/skills', label: 'Skills', icon: '◈' }
+  { name: 'skills', path: '/skills', label: 'Skills', icon: '◈' },
+  { name: 'selfheal', path: '/selfheal', label: '自愈', icon: '✚' }
 ]
 
 // 当前激活菜单

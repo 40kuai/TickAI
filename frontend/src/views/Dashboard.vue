@@ -16,6 +16,7 @@ const stats = ref({
 const runs = ref([])
 const loading = ref(false)
 const errorMsg = ref('')
+const selfheal = ref({ success_rate: 0, pending: 0 })
 
 // 计算成功率
 function calcRate(total, success) {
@@ -91,7 +92,24 @@ async function loadData() {
   }
 }
 
-onMounted(loadData)
+// 加载自愈统计（成功率 + 待审批）
+async function loadSelfhealStats() {
+  try {
+    const res = await api.get('/selfheal/stats')
+    const d = res.data || {}
+    selfheal.value = {
+      success_rate: d.success_rate ?? 0,
+      pending: d.pending ?? 0
+    }
+  } catch {
+    /* 自愈统计加载失败时保持默认值 */
+  }
+}
+
+onMounted(() => {
+  loadData()
+  loadSelfhealStats()
+})
 </script>
 
 <template>
@@ -120,6 +138,22 @@ onMounted(loadData)
         <div class="stat-body">
           <div class="stat-value">{{ card.value }}</div>
           <div class="stat-label">{{ card.label }}</div>
+        </div>
+      </div>
+
+      <!-- 自愈统计卡片 -->
+      <div class="stat-card tone-info">
+        <div class="stat-icon">✚</div>
+        <div class="stat-body">
+          <div class="stat-value">{{ selfheal.success_rate }}%</div>
+          <div class="stat-label">自愈成功率</div>
+        </div>
+      </div>
+      <div class="stat-card tone-warning">
+        <div class="stat-icon">⚠</div>
+        <div class="stat-body">
+          <div class="stat-value">{{ selfheal.pending }}</div>
+          <div class="stat-label">自愈待审批</div>
         </div>
       </div>
     </div>
@@ -241,6 +275,7 @@ onMounted(loadData)
 .tone-success .stat-icon { background: rgba(16, 185, 129, 0.12); color: var(--color-success); }
 .tone-danger .stat-icon { background: rgba(239, 68, 68, 0.12); color: var(--color-danger); }
 .tone-info .stat-icon { background: rgba(59, 130, 246, 0.12); color: var(--color-info); }
+.tone-warning .stat-icon { background: rgba(245, 158, 11, 0.12); color: var(--color-warning); }
 .stat-value {
   font-size: 24px;
   font-weight: 700;

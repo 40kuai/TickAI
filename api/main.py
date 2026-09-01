@@ -22,6 +22,7 @@ from hermes.data.db import init_db
 from .auth_routes import router as auth_router
 from .chat_routes import router as chat_router
 from .history_routes import router as history_router
+from .selfheal_routes import router as selfheal_router
 from .server_routes import router as server_router
 from .skill_routes import router as skill_router
 from .ssh_credential_routes import router as ssh_cred_router
@@ -51,6 +52,7 @@ app.include_router(chat_router)
 app.include_router(tool_router)
 app.include_router(history_router)
 app.include_router(skill_router)
+app.include_router(selfheal_router)
 
 
 # ---------------------------------------------------------------------------

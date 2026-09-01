@@ -31,6 +31,7 @@ class SelfHealActionModelTests(unittest.TestCase):
                 rendered_command="truncate -s 0 /var/log/x.log",
                 status="executed", triggered_by="user",
                 success=True,
+                grade_reasons='["磁盘使用率 85% ≥ 低危阈值 80%"]',
             )
             s.add(act)
             s.flush()
@@ -40,6 +41,7 @@ class SelfHealActionModelTests(unittest.TestCase):
             self.assertEqual(row.scene, "disk_clean")
             self.assertEqual(row.severity, "low")
             self.assertTrue(row.success)
+            self.assertEqual(row.grade_reasons, '["磁盘使用率 85% ≥ 低危阈值 80%"]')
 
     def test_approval_flow_fields(self):
         with db.session_scope() as s:
@@ -83,6 +85,7 @@ class SelfHealActionModelTests(unittest.TestCase):
                 server_id=sv.id, scene="disk_clean", target="/",
                 severity="low", action_name="truncate_log",
                 rendered_command="truncate -s 0 /var/log/x.log",
+                grade_reasons='["reason"]',
             )
             s.add(act)
             s.flush()
@@ -95,6 +98,7 @@ class SelfHealActionModelTests(unittest.TestCase):
             self.assertEqual(d["status"], "pending")
             self.assertIsNone(d["success"])
             self.assertEqual(d["rendered_command"], "truncate -s 0 /var/log/x.log")
+            self.assertEqual(d["grade_reasons"], '["reason"]')
             self.assertIn("id", d)
             # 时间字段为 isoformat 字符串或 None
             self.assertIsInstance(d["created_at"], str)

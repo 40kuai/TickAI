@@ -7,14 +7,13 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from hermes.data import db
 from hermes.data.models import SelfHealAction
-from hermes.tools.ssh import get_server_ssh_args
 
-from . import actions, detect, grading
+from . import actions, config, detect, grading
 
 logger = logging.getLogger(__name__)
 
@@ -24,16 +23,15 @@ SCENE_ACTION = {
     "cache_clean": "clean_cache",
 }
 
-SCENE_VERIFY_PROBE = {
-    "process_restart": "systemctl is-active {service}",
-    "disk_clean": "df -Th {mount}",
-    "cache_clean": "cat /proc/meminfo",
+# 各场景 target 必填 key（缺失直接抛 ValueError，由顶层 catch 兜底落库）
+REQUIRED_TARGET_KEYS = {
+    "process_restart": ("service",),
+    "disk_clean": ("mount", "path"),
+    "cache_clean": ("mode",),
 }
 
 
 def _probe_metric(scene: str, target: Dict[str, Any], out: str) -> Any:
-    if scene == "process_restart":
-        return None
     if scene == "disk_clean":
         return detect.parse_df_usage(out, target.get("mount", ""))
     if scene == "cache_clean":
@@ -41,8 +39,7 @@ def _probe_metric(scene: str, target: Dict[str, Any], out: str) -> Any:
     return None
 
 
-def _verify_recovered(scene: str, target: Dict[str, Any], out: str) -> bool:
-    from . import config
+def verify_recovered(scene: str, target: Dict[str, Any], out: str) -> bool:
     if scene == "process_restart":
         return detect.parse_systemctl_active(out)
     if scene == "disk_clean":
@@ -54,6 +51,12 @@ def _verify_recovered(scene: str, target: Dict[str, Any], out: str) -> bool:
     return False
 
 
+def _validate_target(scene: str, target: Dict[str, Any]) -> None:
+    for key in REQUIRED_TARGET_KEYS.get(scene, ()):
+        if key not in target or target[key] in (None, ""):
+            raise ValueError(f"scene '{scene}' 缺少必填 target key: {key}")
+
+
 def run_selfheal(
     server_id: int,
     scene: str,
@@ -61,25 +64,53 @@ def run_selfheal(
     triggered_by: str = "user",
     action_name: Optional[str] = None,
 ) -> Dict[str, Any]:
+    """执行一次自愈闭环。任何未预期异常兜底为 failed 并落库。"""
+    try:
+        return _run(server_id, scene, target, triggered_by, action_name)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("自愈流程未预期异常: scene=%s server_id=%s", scene, server_id)
+        try:
+            _persist(server_id, scene, target, "high",
+                     action_name or SCENE_ACTION.get(scene) or "unknown",
+                     "failed", triggered_by,
+                     execution={"error": str(exc)}, rendered_command=None)
+        except Exception:  # noqa: BLE001
+            logger.exception("自愈异常落库失败: scene=%s server_id=%s", scene, server_id)
+        return {"status": "failed", "success": False, "reason": f"自愈流程异常: {exc}"}
+
+
+def _run(
+    server_id: int,
+    scene: str,
+    target: Dict[str, Any],
+    triggered_by: str,
+    action_name: Optional[str],
+) -> Dict[str, Any]:
     action_name = action_name or SCENE_ACTION.get(scene)
     if action_name is None:
         raise ValueError(f"unknown scene: {scene}")
+    _validate_target(scene, target)
 
     # ---- 1. 探测 ----
     probe_cmd = detect.probe_command(scene, target)
     probe = actions.exec_ssh(server_id, probe_cmd)
     if not probe["success"]:
         _persist(server_id, scene, target, "low", action_name, "failed",
-                 triggered_by, execution={"error": probe.get("error")})
+                 triggered_by, execution={"error": probe.get("error")},
+                 rendered_command=None)
         return {"severity": "low", "status": "failed", "success": False,
                 "reason": f"探测失败: {probe.get('error')}"}
 
     metric = _probe_metric(scene, target, probe["stdout"])
     is_abnormal = (
-        scene == "process_restart" and not detect.parse_systemctl_active(probe["stdout"])
+        scene == "process_restart"
+        and not detect.parse_systemctl_active(probe["stdout"])
     ) or (
-        scene in ("disk_clean", "cache_clean") and metric is not None
-        and metric >= 80
+        scene == "disk_clean" and metric is not None
+        and metric >= config.DISK_LOW_PCT
+    ) or (
+        scene == "cache_clean" and metric is not None
+        and metric >= config.CACHE_LOW_PCT
     )
     if not is_abnormal:
         return {"severity": "ok", "status": "noop", "success": True,
@@ -91,79 +122,109 @@ def run_selfheal(
     # ---- 3. 低危自主 / 高危审批 ----
     if not g["can_auto"]:
         record = _persist(server_id, scene, target, g["severity"], action_name,
-                          "pending", triggered_by, reasons=g["reasons"])
+                          "pending", triggered_by, reasons=g["reasons"],
+                          rendered_command=None)
         return {"severity": g["severity"], "status": "pending", "success": False,
                 "action_id": record.id, "reasons": g["reasons"],
                 "action_name": action_name,
                 "message": "高危操作，已生成审批单等待人工批准"}
 
-    # ---- 4. 执行（模板白名单） ----
+    # ---- 4. 渲染（模板白名单，全流程仅渲染一次） ----
     try:
         command = actions.render_command(action_name, target)
     except ValueError as exc:
         _persist(server_id, scene, target, g["severity"], action_name,
-                 "failed", triggered_by, reasons=[str(exc)])
+                 "failed", triggered_by, reasons=[str(exc)],
+                 rendered_command=None)
         return {"severity": g["severity"], "status": "failed", "success": False,
                 "reason": str(exc)}
 
     record = _persist(server_id, scene, target, g["severity"], action_name,
-                      "executing", triggered_by, reasons=g["reasons"])
-    exec_result = actions.exec_ssh(server_id, command)
-    if not exec_result["success"]:
-        record.status = "failed"
-        record.execution_result = json.dumps(exec_result, ensure_ascii=False)
-        record.executed_at = datetime.utcnow()
-        _save(record)
-        return {"severity": g["severity"], "status": "failed", "success": False,
-                "reason": f"执行失败: {exec_result.get('error')}"}
+                      "executing", triggered_by, reasons=g["reasons"],
+                      rendered_command=command)
+    record = execute_and_verify(record, target, command)
 
-    record.status = "executed"
-    record.execution_result = json.dumps(exec_result, ensure_ascii=False)
-    record.executed_at = datetime.utcnow()
-    _save(record)
-
-    # ---- 5. 验证（复用探测） ----
-    verify_cmd = SCENE_VERIFY_PROBE[scene].format(**target)
-    verify = actions.exec_ssh(server_id, verify_cmd)
-    if verify["success"] and _verify_recovered(scene, target, verify["stdout"]):
-        record.status = "verified"
-        record.success = True
-    else:
-        record.status = "verification_failed"
-        record.success = False
-    record.verification_result = json.dumps(verify, ensure_ascii=False)
-    _save(record)
-
-    return {
+    result = {
         "severity": g["severity"], "status": record.status,
         "success": record.success, "action_id": record.id,
         "action_name": action_name, "reasons": g["reasons"],
         "rendered_command": command,
     }
+    if record.status == "failed" and record.execution_result:
+        try:
+            err = json.loads(record.execution_result).get("error")
+        except (ValueError, TypeError, AttributeError):
+            err = None
+        result["reason"] = f"执行失败: {err}" if err else "执行失败"
+    return result
+
+
+def execute_and_verify(record, target, command, approver=None):
+    """执行写命令并验证恢复(低危自主执行与人工审批共用)。
+
+    record: 已落库的 SelfHealAction(含 id/server_id/scene/action_name)。
+    command: 已渲染的白名单命令。
+    approver: 审批人用户名,审批路径传入并记录 approver/approved_at。
+    流程: exec 写命令 → 失败置 failed(success=False,保留完整 exec_result) →
+          成功置 executed → 用 detect.probe_command 探测 + verify_recovered 判定 →
+          verified(success=True)/verification_failed(success=False)。
+    返回更新后的 record(在打开的 session 内读回)。
+    """
+    action_id = record.id
+    server_id = record.server_id
+    scene = record.scene
+
+    # ---- 1. 执行写命令 ----
+    exec_result = actions.exec_ssh(server_id, command)
+    if not exec_result["success"]:
+        with db.session_scope() as s:
+            row = s.get(SelfHealAction, action_id)
+            row.status = "failed"
+            row.success = False
+            row.rendered_command = command
+            row.execution_result = json.dumps(exec_result, ensure_ascii=False)
+            row.executed_at = datetime.now(timezone.utc)
+            if approver is not None:
+                row.approver = approver
+                row.approved_at = datetime.now(timezone.utc)
+            return row
+
+    with db.session_scope() as s:
+        row = s.get(SelfHealAction, action_id)
+        row.status = "executed"
+        row.rendered_command = command
+        row.execution_result = json.dumps(exec_result, ensure_ascii=False)
+        row.executed_at = datetime.now(timezone.utc)
+        if approver is not None:
+            row.approver = approver
+            row.approved_at = datetime.now(timezone.utc)
+
+    # ---- 2. 验证(复用探测命令) ----
+    verify_cmd = detect.probe_command(scene, target)
+    verify = actions.exec_ssh(server_id, verify_cmd)
+    recovered = bool(verify.get("success")) and verify_recovered(
+        scene, target, verify.get("stdout", ""))
+
+    with db.session_scope() as s:
+        row = s.get(SelfHealAction, action_id)
+        row.status = "verified" if recovered else "verification_failed"
+        row.success = recovered
+        row.verification_result = json.dumps(verify, ensure_ascii=False)
+        return row
 
 
 def _persist(server_id, scene, target, severity, action_name, status,
-             triggered_by, reasons=None, execution=None):
-    command = None
-    try:
-        command = actions.render_command(action_name, target)
-    except ValueError:
-        command = ""
+             triggered_by, reasons=None, execution=None, rendered_command=None):
     with db.session_scope() as s:
         row = SelfHealAction(
             server_id=server_id, scene=scene,
             target=json.dumps(target, ensure_ascii=False),
             severity=severity, action_name=action_name,
-            rendered_command=command, status=status,
+            rendered_command=rendered_command, status=status,
             triggered_by=triggered_by,
             execution_result=json.dumps(execution, ensure_ascii=False) if execution else None,
-            verification_result=json.dumps(reasons, ensure_ascii=False) if reasons else None,
+            grade_reasons=json.dumps(reasons, ensure_ascii=False) if reasons else None,
         )
         s.add(row)
         s.flush()
         return row
-
-
-def _save(record: SelfHealAction) -> None:
-    with db.session_scope() as s:
-        s.merge(record)

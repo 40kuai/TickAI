@@ -1,15 +1,12 @@
 """Tests for hermes.selfheal.orchestrator (main flow).
 
 编排器是确定性流程：探测→分级→执行/审批→验证→落库。
-测试用 mock 隔离 SSH/凭据；落库使用隔离的测试 DB（OPS_DB_PATH）。
+测试用 mock 隔离 SSH/凭据；落库使用隔离的测试 DB（OPS_DB_PATH，
+由 tests/selfheal/conftest.py 统一配置）。
 """
 import os
 import unittest
-from pathlib import Path
 from unittest.mock import patch
-
-os.environ["OPS_DB_PATH"] = "/tmp/opsticket_test/selfheal.db"
-Path("/tmp/opsticket_test").mkdir(parents=True, exist_ok=True)
 
 from hermes.data import db, models  # noqa: E402
 from hermes.selfheal import config, orchestrator  # noqa: E402
@@ -22,10 +19,6 @@ def _mock_exec(results):
         return next(it)
 
     return patch("hermes.selfheal.actions.exec_ssh", side_effect=_f)
-
-
-def _mock_get_server_args(server_id):
-    return ("10.0.0.1", {"port": 22, "username": "root", "password": "x"}, "web-01")
 
 
 class _SelfHealTestCase(unittest.TestCase):
@@ -52,17 +45,15 @@ class RunLowRiskDiskTests(_SelfHealTestCase):
 
     def test_low_risk_auto_execute_and_verify_success(self):
         # 探测 85%(低危区间 [80,90)) → 自动执行 truncate_log → 验证 70% < 80 → verified
-        with patch("hermes.selfheal.orchestrator.get_server_ssh_args",
-                   side_effect=_mock_get_server_args), \
-             _mock_exec([
-                 {"success": True, "exit_code": 0,
-                  "stdout": "Filesystem Type Size Used Avail Use% Mounted on\n"
-                            "/dev/vda1 ext4 50G 42G 8G 85% /\n", "stderr": ""},
-                 {"success": True, "exit_code": 0, "stdout": "", "stderr": ""},
-                 {"success": True, "exit_code": 0,
-                  "stdout": "Filesystem Type Size Used Avail Use% Mounted on\n"
-                            "/dev/vda1 ext4 50G 35G 15G 70% /\n", "stderr": ""},
-             ]):
+        with _mock_exec([
+                {"success": True, "exit_code": 0,
+                 "stdout": "Filesystem Type Size Used Avail Use% Mounted on\n"
+                           "/dev/vda1 ext4 50G 42G 8G 85% /\n", "stderr": ""},
+                {"success": True, "exit_code": 0, "stdout": "", "stderr": ""},
+                {"success": True, "exit_code": 0,
+                 "stdout": "Filesystem Type Size Used Avail Use% Mounted on\n"
+                           "/dev/vda1 ext4 50G 35G 15G 70% /\n", "stderr": ""},
+        ]):
             result = orchestrator.run_selfheal(
                 1, "disk_clean",
                 {"mount": "/", "path": "/var/log/nginx/access.log"}, "user")
@@ -70,31 +61,84 @@ class RunLowRiskDiskTests(_SelfHealTestCase):
         self.assertEqual(result["status"], "verified")
         self.assertTrue(result["success"])
         self.assertEqual(result["action_name"], "truncate_log")
+        # DB 持久化断言：verified + success=True + 精确 truncate 命令
+        with db.session_scope() as s:
+            row = s.query(models.SelfHealAction).first()
+            self.assertEqual(row.status, "verified")
+            self.assertTrue(row.success)
+            self.assertEqual(row.rendered_command, "truncate -s 0 /var/log/nginx/access.log")
 
     def test_high_risk_goes_to_pending(self):
         # 探测 96% ≥ 高危阈值 90 → 落审批单 pending，不执行
-        with patch("hermes.selfheal.orchestrator.get_server_ssh_args",
-                   side_effect=_mock_get_server_args), \
-             _mock_exec([
-                 {"success": True, "exit_code": 0,
-                  "stdout": "Filesystem Type Size Used Avail Use% Mounted on\n"
-                            "/dev/vda1 ext4 50G 48G 2G 96% /\n", "stderr": ""},
-             ]):
-            result = orchestrator.run_selfheal(1, "disk_clean", {"mount": "/"}, "user")
+        with _mock_exec([
+                {"success": True, "exit_code": 0,
+                 "stdout": "Filesystem Type Size Used Avail Use% Mounted on\n"
+                           "/dev/vda1 ext4 50G 48G 2G 96% /\n", "stderr": ""},
+        ]):
+            result = orchestrator.run_selfheal(
+                1, "disk_clean",
+                {"mount": "/", "path": "/var/log/nginx/access.log"}, "user")
         self.assertEqual(result["severity"], "high")
         self.assertEqual(result["status"], "pending")
         self.assertFalse(result["success"])
-        self.assertIsNone(result.get("execution_result"))
         self.assertIn("action_id", result)
+        # DB 断言：pending 记录的分级理由已落库（grade_reasons 非空）
+        with db.session_scope() as s:
+            row = s.query(models.SelfHealAction).filter_by(status="pending").first()
+            self.assertIsNotNone(row)
+            self.assertIsNotNone(row.grade_reasons)
+            self.assertNotEqual(row.grade_reasons, "")
 
     def test_probe_failure_returns_failed(self):
-        with patch("hermes.selfheal.orchestrator.get_server_ssh_args",
-                   side_effect=_mock_get_server_args), \
-             _mock_exec([{"success": False, "error": "SSH error: timeout"}]):
+        with _mock_exec([{"success": False, "error": "SSH error: timeout"}]):
             result = orchestrator.run_selfheal(
-                1, "disk_clean", {"mount": "/"}, "user")
+                1, "disk_clean",
+                {"mount": "/", "path": "/var/log/nginx/access.log"}, "user")
         self.assertEqual(result["status"], "failed")
         self.assertFalse(result["success"])
+        # DB 断言：存在 status=failed 的失败记录
+        with db.session_scope() as s:
+            row = s.query(models.SelfHealAction).filter_by(status="failed").first()
+            self.assertIsNotNone(row)
+
+    def test_exec_failure_returns_failed_and_persists(self):
+        # 探测 85% → 执行失败(exec_ssh success=False) → status=failed 且落库失败记录
+        with _mock_exec([
+                {"success": True, "exit_code": 0,
+                 "stdout": "Filesystem Type Size Used Avail Use% Mounted on\n"
+                           "/dev/vda1 ext4 50G 42G 8G 85% /\n", "stderr": ""},
+                {"success": False, "error": "SSH error: command failed", "exit_code": 1,
+                 "stdout": "", "stderr": "permission denied"},
+        ]):
+            result = orchestrator.run_selfheal(
+                1, "disk_clean",
+                {"mount": "/", "path": "/var/log/nginx/access.log"}, "user")
+        self.assertEqual(result["severity"], "low")
+        self.assertEqual(result["status"], "failed")
+        self.assertFalse(result["success"])
+        with db.session_scope() as s:
+            row = s.query(models.SelfHealAction).filter_by(status="failed").first()
+            self.assertIsNotNone(row)
+            self.assertFalse(row.success)
+            self.assertIn("command failed", row.execution_result or "")
+
+    def test_render_failure_returns_failed_and_persists(self):
+        # 渲染失败：path 不在白名单 → ValueError → status=failed 落库，rendered_command 为 None
+        with _mock_exec([
+                {"success": True, "exit_code": 0,
+                 "stdout": "Filesystem Type Size Used Avail Use% Mounted on\n"
+                           "/dev/vda1 ext4 50G 42G 8G 85% /\n", "stderr": ""},
+        ]):
+            result = orchestrator.run_selfheal(
+                1, "disk_clean",
+                {"mount": "/", "path": "/tmp/not-whitelisted.log"}, "user")
+        self.assertEqual(result["status"], "failed")
+        self.assertFalse(result["success"])
+        with db.session_scope() as s:
+            row = s.query(models.SelfHealAction).filter_by(status="failed").first()
+            self.assertIsNotNone(row)
+            self.assertIsNone(row.rendered_command)
+            self.assertIn("参数校验失败", row.grade_reasons or "")
 
 
 class RunProcessTests(_SelfHealTestCase):
@@ -107,13 +151,11 @@ class RunProcessTests(_SelfHealTestCase):
 
     def test_process_low_risk_restart(self):
         # 探测 failed(服务异常) → 低危 → restart nginx → 验证 active → verified
-        with patch("hermes.selfheal.orchestrator.get_server_ssh_args",
-                   side_effect=_mock_get_server_args), \
-             _mock_exec([
-                 {"success": True, "exit_code": 0, "stdout": "failed", "stderr": ""},
-                 {"success": True, "exit_code": 0, "stdout": "", "stderr": ""},
-                 {"success": True, "exit_code": 0, "stdout": "active", "stderr": ""},
-             ]):
+        with _mock_exec([
+                {"success": True, "exit_code": 0, "stdout": "failed", "stderr": ""},
+                {"success": True, "exit_code": 0, "stdout": "", "stderr": ""},
+                {"success": True, "exit_code": 0, "stdout": "active", "stderr": ""},
+        ]):
             result = orchestrator.run_selfheal(
                 1, "process_restart", {"service": "nginx"}, "dialog")
         self.assertEqual(result["status"], "verified")
@@ -121,17 +163,45 @@ class RunProcessTests(_SelfHealTestCase):
         self.assertEqual(result["action_name"], "restart_service")
 
     def test_verification_failed_means_success_false(self):
-        with patch("hermes.selfheal.orchestrator.get_server_ssh_args",
-                   side_effect=_mock_get_server_args), \
-             _mock_exec([
-                 {"success": True, "exit_code": 0, "stdout": "failed", "stderr": ""},
-                 {"success": True, "exit_code": 0, "stdout": "", "stderr": ""},
-                 {"success": True, "exit_code": 0, "stdout": "failed", "stderr": ""},
-             ]):
+        with _mock_exec([
+                {"success": True, "exit_code": 0, "stdout": "failed", "stderr": ""},
+                {"success": True, "exit_code": 0, "stdout": "", "stderr": ""},
+                {"success": True, "exit_code": 0, "stdout": "failed", "stderr": ""},
+        ]):
             result = orchestrator.run_selfheal(
                 1, "process_restart", {"service": "nginx"}, "user")
         self.assertEqual(result["status"], "verification_failed")
         self.assertFalse(result["success"])
+
+
+class RunCacheTests(_SelfHealTestCase):
+    def setUp(self):
+        super().setUp()
+        os.environ["SELFHEAL_DROPCACHES_MODES_WHITELIST"] = "1,2,3"
+        config.reload_config()
+
+    def test_cache_low_risk_success(self):
+        # 探测缓存 85%(低危) → clean_cache → 验证 70% < 80 → verified
+        with _mock_exec([
+                {"success": True, "exit_code": 0,
+                 "stdout": "MemTotal:       2000000 kB\n"
+                           "MemFree:         200000 kB\n"
+                           "Buffers:         500000 kB\n"
+                           "Cached:         1000000 kB\n"
+                           "SReclaimable:    200000 kB\n", "stderr": ""},
+                {"success": True, "exit_code": 0, "stdout": "", "stderr": ""},
+                {"success": True, "exit_code": 0,
+                 "stdout": "MemTotal:       2000000 kB\n"
+                           "MemFree:         800000 kB\n"
+                           "Buffers:         300000 kB\n"
+                           "Cached:          600000 kB\n"
+                           "SReclaimable:    100000 kB\n", "stderr": ""},
+        ]):
+            result = orchestrator.run_selfheal(
+                1, "cache_clean", {"mode": "1"}, "user")
+        self.assertEqual(result["status"], "verified")
+        self.assertTrue(result["success"])
+        self.assertEqual(result["action_name"], "clean_cache")
 
 
 if __name__ == "__main__":

@@ -147,6 +147,8 @@ CHAT_VISIBLE_TOOLS: tuple[str, ...] = (
     "jenkins_build_records",
     # Skill execution
     "run_skill",
+    # 受控自愈闭环(探测→分级→低危自主/高危审批→验证,写命令限模板白名单)
+    "run_selfheal",
 )
 
 
