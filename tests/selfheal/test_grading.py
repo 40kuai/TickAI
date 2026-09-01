@@ -25,6 +25,18 @@ class DiskGradingTests(unittest.TestCase):
         self.assertEqual(g["severity"], "ok")
         self.assertFalse(g["can_auto"])
 
+    def test_boundary_90_high(self):
+        # 锁 `>=` 语义：恰好等于高危阈值 90 → high，不可自动执行
+        g = _grade("disk_clean", 90)
+        self.assertEqual(g["severity"], "high")
+        self.assertFalse(g["can_auto"])
+
+    def test_boundary_80_low(self):
+        # 锁 `>=` 语义：恰好等于低危阈值 80 → low，可自动执行
+        g = _grade("disk_clean", 80)
+        self.assertEqual(g["severity"], "low")
+        self.assertTrue(g["can_auto"])
+
 
 class CacheGradingTests(unittest.TestCase):
     def test_low_cache(self):
@@ -34,6 +46,16 @@ class CacheGradingTests(unittest.TestCase):
     def test_high_cache(self):
         g = _grade("cache_clean", 95)
         self.assertEqual(g["severity"], "high")
+
+    def test_boundary_90_high(self):
+        # 锁 `>=` 语义：恰好等于高危阈值 90 → high
+        g = _grade("cache_clean", 90)
+        self.assertEqual(g["severity"], "high")
+
+    def test_boundary_80_low(self):
+        # 锁 `>=` 语义：恰好等于低危阈值 80 → low
+        g = _grade("cache_clean", 80)
+        self.assertEqual(g["severity"], "low")
 
 
 class ProcessGradingTests(unittest.TestCase):
@@ -56,6 +78,24 @@ class ProcessGradingTests(unittest.TestCase):
             datetime(2026, 9, 1, 23, 0),
         )
         self.assertEqual(g["severity"], "low")
+
+    def test_peak_hour_boundary_9h(self):
+        # 半开区间 [9,18)：9 时含端点 → 高峰 → high
+        g = grading.grade(
+            "process_restart", {"value": None}, {"name": "web-01"},
+            datetime(2026, 9, 1, 9, 0),
+        )
+        self.assertEqual(g["severity"], "high")
+        self.assertFalse(g["can_auto"])
+
+    def test_off_peak_boundary_18h(self):
+        # 半开区间 [9,18)：18 时不含端点 → 非高峰 → low
+        g = grading.grade(
+            "process_restart", {"value": None}, {"name": "web-01"},
+            datetime(2026, 9, 1, 18, 0),
+        )
+        self.assertEqual(g["severity"], "low")
+        self.assertTrue(g["can_auto"])
 
     def test_reasons_populated(self):
         g = _grade("disk_clean", 96)

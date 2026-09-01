@@ -12,6 +12,7 @@ from . import config
 
 
 def _is_peak_hour(now: datetime) -> bool:
+    # 半开区间语义 [lo, hi)：含 lo 不含 hi（如 9-18 表示 9 时高峰、18 时非高峰）
     for lo, hi in config.PEAK_HOURS:
         if lo <= now.hour < hi:
             return True
@@ -24,7 +25,7 @@ def grade(
     server: Dict[str, Any],
     now: Optional[datetime] = None,
 ) -> Dict[str, Any]:
-    now = now or datetime.now()
+    now = now if now is not None else datetime.now()
     value = (metrics or {}).get("value")
     reasons = []
     severity = "ok"
