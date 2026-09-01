@@ -168,23 +168,24 @@ def chat(
                 extra_runs += 1
 
             # Persist to history (skip tools that persist internally).
-            # 仅当 server_id 是有效正整数时才落库,避免 session.get(Server, None)
-            # 触发 "fully NULL primary key" 警告。
+            # check_resources_on_server / list_services_on_server 在 services.py
+            # 内部已落库,避免重复记录。其余所有工具调用一律审计落库;
+            # server_id 仅对 SSH 工具有效,观测类工具(prometheus/jenkins/
+            # nightingale/k8s/ldap/db/run_skill)为 None 也照常记录。
             if name not in ("check_resources_on_server", "list_services_on_server"):
                 sid = args.get("server_id")
                 if isinstance(sid, bool) or not isinstance(sid, int) or sid <= 0:
                     sid = None
-                if sid is not None:
-                    try:
-                        from hermes.tools.ssh.runner import persist_tool_run
-                        persist_tool_run(
-                            server_id=sid,
-                            command_label=name,
-                            result_json=result,
-                            triggered_by="llm_tool_call",
-                        )
-                    except Exception:
-                        pass
+                try:
+                    from hermes.tools.ssh.runner import persist_tool_run
+                    persist_tool_run(
+                        server_id=sid,
+                        command_label=name,
+                        result_json=result,
+                        triggered_by="llm_tool_call",
+                    )
+                except Exception:
+                    pass
 
             messages.append({
                 "role": "tool",
@@ -357,23 +358,22 @@ def chat_stream(
                 extra_runs += 1
 
             # Persist to history (skip tools that persist internally).
-            # 仅当 server_id 是有效正整数时才落库,避免 session.get(Server, None)
-            # 触发 "fully NULL primary key" 警告。
+            # 同 chat():除内部已落库的 SSH wrapper 外,所有工具调用一律审计落库,
+            # 观测类工具 server_id 为 None 也照常记录。
             if name not in ("check_resources_on_server", "list_services_on_server"):
                 sid = args.get("server_id")
                 if isinstance(sid, bool) or not isinstance(sid, int) or sid <= 0:
                     sid = None
-                if sid is not None:
-                    try:
-                        from hermes.tools.ssh.runner import persist_tool_run
-                        persist_tool_run(
-                            server_id=sid,
-                            command_label=name,
-                            result_json=result,
-                            triggered_by="llm_tool_call",
-                        )
-                    except Exception:
-                        pass
+                try:
+                    from hermes.tools.ssh.runner import persist_tool_run
+                    persist_tool_run(
+                        server_id=sid,
+                        command_label=name,
+                        result_json=result,
+                        triggered_by="llm_tool_call",
+                    )
+                except Exception:
+                    pass
 
             yield {
                 "type": "tool_call_end",

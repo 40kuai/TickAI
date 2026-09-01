@@ -173,6 +173,43 @@ class ChatToolCallTests(unittest.TestCase):
         self.assertIn("max tool rounds", result["reply"])
 
 
+class ChatNonSshToolAuditTests(unittest.TestCase):
+    """方案1: LLM 对话中调用非 SSH 工具(无 server_id)也应落库 run_history。
+
+    现状:chat.py 仅当 server_id 为有效正整数时才 persist_tool_run,
+    prometheus/jenkins/nightingale/k8s/ldap/db/run_skill 等观测工具调用
+    全部跳过,run_history 查不到 → 操作审计盲区。
+    期望:所有工具调用都落库,server_id 可空。
+    """
+
+    def setUp(self):
+        _wipe()
+
+    def test_non_ssh_tool_call_is_persisted_without_server(self):
+        # Round 1: LLM 调用 prometheus_service_health(无 server_id)
+        # Round 2: LLM 给出最终回答
+        r1 = _make_tool_response(
+            "prometheus_service_health", {"service": "nfc-user-center"}, "call_1"
+        )
+        r2 = _make_text_response("Service is healthy.")
+        client = _fake_client([r1, r2])
+
+        fake_result = json.dumps({"status": "ok", "dimensions": []})
+        with patch.object(registry, "dispatch", return_value=fake_result) as mock_dispatch:
+            result = llm_agent.chat("check nfc health", client=client)
+
+        self.assertEqual(result["rounds"], 2)
+        self.assertEqual(mock_dispatch.call_count, 1)
+        with db.session_scope() as s:
+            runs = s.query(RunRecord).all()
+            self.assertEqual(len(runs), 1, "非 SSH 工具调用应落库 run_history")
+            r = runs[0]
+            self.assertIsNone(r.server_id)
+            self.assertEqual(r.command, "prometheus_service_health")
+            self.assertEqual(r.triggered_by, "llm_tool_call")
+            self.assertEqual(r.status, "success")
+
+
 class MissingApiKeyTests(unittest.TestCase):
     def test_raises_if_key_missing(self):
         with patch.dict(os.environ, {"TOKENHUB_API_KEY": ""}, clear=False):

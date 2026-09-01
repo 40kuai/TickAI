@@ -30,6 +30,11 @@ ALLOWED_NON_TOOL_REFS = {
     "query", "recover_time", "rule_name", "service", "service_prefix",
     "severity", "trigger_time", "trigger_value",
     "diagnose_prometheus_anomaly",  # 引用的是另一个 skill，不是工具
+    # Output format 里的 JSON 字段名（不是工具引用）
+    "alerts", "deployment", "job_name", "metric_findings",
+    "recovery_suggestions", "root_cause", "endpoint",
+    # 工具参数名（不是工具引用）
+    "start", "end",
 }
 
 
@@ -81,6 +86,48 @@ class ClosedLoopCompletenessTests(unittest.TestCase):
     def test_describes_linked_steps_in_order(self):
         """The body should describe an ordered pipeline (步骤/流程)."""
         self.assertIn("步骤", self.body)
+
+    def test_has_deployment_change_correlation(self):
+        """闭环技能必须包含「发布变更关联」环节：发布变更是故障最常见根因之一。
+        Jenkins 发布记录工具已注册在 monitoring toolset，技能应引用它们做
+        告警时间窗内的发布关联，判断是否由某次发布触发。"""
+        for kw in ("jenkins_service_jobs", "jenkins_build_records"):
+            self.assertIn(kw, self.body, f"技能必须引用发布变更查询工具 {kw}")
+        # 需有"发布"相关的关联语义关键词
+        self.assertTrue(
+            any(kw in self.body for kw in ("发布", "变更", "回滚")),
+            "技能必须包含发布/变更/回滚关联语义",
+        )
+
+    def test_has_alert_consolidation(self):
+        """闭环技能必须包含「告警收敛」策略：同服务多规则、跨服务共享依赖的
+        并发告警应归并为单一根因，避免输出割裂报告。"""
+        self.assertIn("收敛", self.body, "技能必须包含「收敛」策略")
+        self.assertTrue(
+            any(kw in self.body for kw in ("同服务多规则", "共享依赖", "同源", "归并")),
+            "技能必须包含多规则/共享依赖归并语义",
+        )
+
+    def test_has_actionable_recovery_check(self):
+        """闭环技能必须包含「自愈建议可执行性校验」：每条建议须具备对象/定位/动作
+        三要素，无法满足时标注 needs_human 兜底，不得假装可执行。"""
+        self.assertIn("needs_human", self.body, "技能必须提供 needs_human 兜底标注")
+        self.assertTrue(
+            any(kw in self.body for kw in ("对象", "定位", "动作", "三要素")),
+            "技能必须定义建议的可执行要素",
+        )
+
+    def test_has_time_window_alignment(self):
+        """闭环技能必须对齐时间窗口：指标查询须用告警 trigger_time 对应的
+        start/end（而非默认最近 10 分钟），否则告警发生时的指标状态查不到，
+        会误判"现在正常"。"""
+        self.assertTrue(
+            any(kw in self.body for kw in ("trigger_time", "时间窗", "对齐", "窗口")),
+            "技能必须包含时间窗口对齐语义",
+        )
+        # 指标查询工具须显式带 start/end
+        self.assertIn("start", self.body, "技能必须说明指标查询传 start")
+        self.assertIn("end", self.body, "技能必须说明指标查询传 end")
 
 
 class ToolReferencesRealTests(unittest.TestCase):

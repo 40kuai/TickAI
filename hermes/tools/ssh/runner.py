@@ -155,7 +155,7 @@ def persist_tool_run(
         )
         session.add(run)
 
-        if status == "success":
+        if status == "success" and server_id is not None:
             server = session.get(Server, server_id)
             if server is not None:
                 server.last_seen_at = finished_at
