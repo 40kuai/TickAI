@@ -167,5 +167,42 @@ class CheckDiskHandlerIntegrationTests(unittest.TestCase):
         self.assertEqual(captured["command"], "df -Th")
 
 
+class PersistToolRunTests(unittest.TestCase):
+    """persist_tool_run 用于"wrapper 类工具"(LLM 调用/工具页手动执行)的审计落库。
+
+    这些工具的真实执行耗时发生在调用方(dispatch),不在 persist_tool_run 内部,
+    因此调用方必须把真实耗时通过 duration_ms 传入,而不是由函数内部自测
+    (内部自测几乎恒为 0,导致历史记录耗时显示不对)。
+    """
+
+    def setUp(self):
+        _wipe()
+
+    def test_duration_ms_passed_through(self):
+        run = ssh_runner.persist_tool_run(
+            None, "prometheus_metric_query",
+            json.dumps({"status": "ok"}), "user_button",
+            duration_ms=1234,
+        )
+        self.assertEqual(run.duration_ms, 1234)
+
+    def test_duration_ms_defaults_when_omitted(self):
+        # 未传 duration_ms 时保持原行为(向后兼容):不小于 0
+        run = ssh_runner.persist_tool_run(
+            None, "prometheus_metric_query",
+            json.dumps({"status": "ok"}), "user_button",
+        )
+        self.assertGreaterEqual(run.duration_ms, 0)
+
+    def test_error_result_still_persists_duration(self):
+        run = ssh_runner.persist_tool_run(
+            None, "jenkins_build_records",
+            json.dumps({"error": "timeout"}), "llm_tool_call",
+            duration_ms=5678,
+        )
+        self.assertEqual(run.status, "failed")
+        self.assertEqual(run.duration_ms, 5678)
+
+
 if __name__ == "__main__":
     unittest.main()

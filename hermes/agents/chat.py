@@ -237,6 +237,7 @@ def chat(
                         command_label=name,
                         result_json=result,
                         triggered_by="llm_tool_call",
+                        duration_ms=elapsed_ms,
                     )
                 except Exception:
                     pass
@@ -412,6 +413,7 @@ def chat_stream(
                         command_label=name,
                         result_json=result,
                         triggered_by="llm_tool_call",
+                        duration_ms=elapsed_ms,
                     )
                 except Exception:
                     pass

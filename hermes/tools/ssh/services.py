@@ -12,6 +12,7 @@ never start/stop services; the user must do that via the UI.
 from __future__ import annotations
 
 import json
+import time
 
 from hermes.tools.registry import registry, tool_error, tool_result
 from hermes.tools.ssh.resources import check_resources_handler, list_services_handler
@@ -82,7 +83,9 @@ def check_resources_on_server_handler(args: dict, **kwargs) -> str:
         server_pk = server.id
         cred_args = cred.to_connect_args()
 
+    t0 = time.perf_counter()
     result_str = check_resources_handler({"host": host, **cred_args})
+    elapsed_ms = int((time.perf_counter() - t0) * 1000)
 
     # Persist audit (succeeds even if SSH failed — we record the failure)
     try:
@@ -91,6 +94,7 @@ def check_resources_on_server_handler(args: dict, **kwargs) -> str:
             command_label="check_resources",
             result_json=result_str,
             triggered_by="llm_tool_call",
+            duration_ms=elapsed_ms,
             triggered_context={
                 "tool_name": "check_resources_on_server",
                 "server_name": server_name,
@@ -128,7 +132,9 @@ def list_services_on_server_handler(args: dict, **kwargs) -> str:
         server_pk = server.id
         cred_args = cred.to_connect_args()
 
+    t0 = time.perf_counter()
     result_str = list_services_handler({"host": host, **cred_args})
+    elapsed_ms = int((time.perf_counter() - t0) * 1000)
 
     try:
         ssh_runner.persist_tool_run(
@@ -136,6 +142,7 @@ def list_services_on_server_handler(args: dict, **kwargs) -> str:
             command_label="list_services",
             result_json=result_str,
             triggered_by="llm_tool_call",
+            duration_ms=elapsed_ms,
             triggered_context={
                 "tool_name": "list_services_on_server",
                 "server_name": server_name,

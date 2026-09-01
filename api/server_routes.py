@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -91,11 +92,14 @@ def _dispatch_and_persist(
 ) -> dict:
     """Dispatch an SSH tool with server credentials and persist the audit."""
     args = _get_server_credentials(server_id)
+    t0 = time.perf_counter()
     result_json = registry.dispatch(tool_name, args)
+    elapsed_ms = int((time.perf_counter() - t0) * 1000)
     # Persist audit record (best-effort, never breaks the response)
     try:
         ssh_runner.persist_tool_run(
-            server_id, command_label, result_json, "user_button"
+            server_id, command_label, result_json, "user_button",
+            duration_ms=elapsed_ms,
         )
     except Exception:
         pass

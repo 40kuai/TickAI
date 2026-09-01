@@ -10,6 +10,7 @@ every executed tool is persisted to the audit log.
 from __future__ import annotations
 
 import json
+import time
 from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -50,7 +51,9 @@ def run_tool(name: str, req: ToolRunRequest, user=Depends(get_current_user)):
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f"Tool '{name}' is not allowed to be run from the Tools page",
         )
+    t0 = time.perf_counter()
     result_json = registry.dispatch(name, req.args)
+    elapsed_ms = int((time.perf_counter() - t0) * 1000)
     # Audit: persist every manual tool run (best-effort, never breaks response).
     try:
         from hermes.tools.ssh.runner import persist_tool_run
@@ -63,6 +66,7 @@ def run_tool(name: str, req: ToolRunRequest, user=Depends(get_current_user)):
             command_label=name,
             result_json=result_json,
             triggered_by="user_button",
+            duration_ms=elapsed_ms,
         )
     except Exception:  # noqa: BLE001
         pass

@@ -39,7 +39,7 @@ function statusBadge(status) {
   const s = String(status || '').toLowerCase()
   if (s === 'success' || s === 'succeeded') return 'badge-success'
   if (s === 'running' || s === 'pending') return 'badge-info'
-  if (s === 'failed' || s === 'error') return 'badge-danger'
+  if (s === 'failed' || s === 'error' || s === 'ssh_error') return 'badge-danger'
   return 'badge-gray'
 }
 
@@ -75,7 +75,7 @@ async function loadData() {
       ['success', 'succeeded'].includes(String(r.status || '').toLowerCase())
     ).length
     const failed = list.filter((r) =>
-      ['failed', 'error'].includes(String(r.status || '').toLowerCase())
+      ['failed', 'error', 'ssh_error'].includes(String(r.status || '').toLowerCase())
     ).length
     stats.value = {
       total,
