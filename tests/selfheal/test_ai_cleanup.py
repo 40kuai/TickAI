@@ -78,6 +78,17 @@ class AiCleanupPlanTests(_AiCleanupTestCase):
                 self.assertEqual(r.triggered_by, "ai")
                 self.assertEqual(r.severity, "high")
 
+    def test_create_plan_items_not_list_rejected(self):
+        result = ai_cleanup.create_plan(1, {"mount": "/", "items": "oops"}, plan_id="plan-x")
+        self.assertEqual(result["accepted"], 0)
+        self.assertEqual(result["rejected"], 1)
+        self.assertEqual(result["items"][0]["ok"], False)
+
+    def test_create_plan_item_not_dict_rejected(self):
+        result = ai_cleanup.create_plan(1, {"mount": "/", "items": ["rm -rf /", 42]}, plan_id="plan-y")
+        self.assertEqual(result["accepted"], 0)
+        self.assertEqual(result["rejected"], 2)
+
 
 if __name__ == "__main__":
     unittest.main()

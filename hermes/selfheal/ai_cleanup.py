@@ -8,12 +8,13 @@ AI 只读扫描(scan_log_cleanup)后由 LLM 产出清理策略 JSON, 本模块:
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from hermes.data import db
 from hermes.data.models import SelfHealAction
 
-from . import actions, config
+from . import actions
 
 # AI 策略项类型 → action_name(映射到 actions 模板白名单)
 _TYPE_ACTIONS = {
@@ -23,9 +24,14 @@ _TYPE_ACTIONS = {
     "run_cleanup_category": "run_cleanup_script",
 }
 
+# mount 白名单: 必须是以 / 开头的安全绝对路径(仅字母数字 / . _ -), 防注入
+_MOUNT_RE = re.compile(r"^/[A-Za-z0-9/._-]*$")
+
 
 def _validate_item(item: Dict[str, Any], mount: str = "/") -> Tuple[bool, Optional[Dict[str, Any]], str]:
     """校验单个 AI 清理项。返回 (ok, {action,target,severity,reasons}, reason/None)。"""
+    if not isinstance(item, dict):
+        return False, None, "非法清理项: 必须是对象"
     itype = (item or {}).get("type", "")
     if itype not in _TYPE_ACTIONS:
         return False, None, f"未知类型: {itype!r}"
@@ -41,8 +47,8 @@ def _validate_item(item: Dict[str, Any], mount: str = "/") -> Tuple[bool, Option
         target = {"mount": mount, "size": str(item.get("size", ""))}
     elif itype == "run_cleanup_category":
         target = {"mount": mount, "category": str(item.get("category", ""))}
-    else:
-        return False, None, f"未知类型: {itype!r}"
+    else:  # 防御: _TYPE_ACTIONS 新增类型但未加分支时绝不静默
+        raise AssertionError(f"_TYPE_ACTIONS 未实现分支: {itype!r}")
 
     # 模板 + 白名单校验(失败抛 ValueError, 绝不 fallback)
     try:
@@ -66,6 +72,11 @@ def create_plan(server_id: int, strategy: Dict[str, Any],
     plan_id = plan_id or f"plan-{uuid.uuid4().hex[:12]}"
     mount = str((strategy or {}).get("mount") or "/")
 
+    # mount 严格白名单校验(仅安全绝对路径), 防探测命令注入
+    if not _MOUNT_RE.match(mount):
+        return {"plan_id": plan_id, "accepted": 0, "rejected": 1,
+                "items": [{"ok": False, "reason": f"mount 非法: {mount!r}"}]}
+
     items = (strategy or {}).get("items", [])
     if not isinstance(items, list):
         return {"plan_id": plan_id, "accepted": 0, "rejected": 1,
@@ -81,7 +92,7 @@ def create_plan(server_id: int, strategy: Dict[str, Any],
             out_items.append({"ok": False, "reason": reason})
             continue
         # 生成 pending 审批单
-        _persist_pending(server_id, plan_id, detail, item)
+        _persist_pending(server_id, plan_id, detail)
         accepted += 1
         out_items.append({"ok": True, "action": detail["action"],
                           "target": detail["target"]})
@@ -90,8 +101,7 @@ def create_plan(server_id: int, strategy: Dict[str, Any],
             "rejected": rejected, "items": out_items}
 
 
-def _persist_pending(server_id: int, plan_id: str, detail: Dict[str, Any],
-                     item: Dict[str, Any]) -> None:
+def _persist_pending(server_id: int, plan_id: str, detail: Dict[str, Any]) -> None:
     with db.session_scope() as s:
         row = SelfHealAction(
             server_id=server_id,
