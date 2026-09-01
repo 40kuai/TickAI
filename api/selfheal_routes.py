@@ -1,9 +1,11 @@
-"""自愈闭环 API 路由（KR2 Task 7）。
+"""自愈闭环 API 路由（KR2 Task 7/8）。
 
 提供 /api/selfheal 下的:
-- GET  /scenes                       3 场景元数据
+- GET  /scenes                       场景元数据(4 场景)
 - POST /run                          触发一次自愈闭环(调 orchestrator.run_selfheal)
-- GET  /actions                      动作列表(status_filter + created_at 倒序)
+- POST /scan-log                     触发只读清单扫描(通道二数据源)
+- POST /ai-plan                      提交 AI 清理策略, 校验后生成 pending 审批单(plan_id 归组)
+- GET  /actions                      动作列表(status_filter / plan_id + created_at 倒序)
 - POST /actions/{id}/approve         审批并执行:pending→重渲染→执行→验证
 - POST /actions/{id}/reject          驳回
 - GET  /stats                        成功率统计
@@ -47,6 +49,16 @@ class SelfHealRunRequest(BaseModel):
     action_name: Optional[str] = None
 
 
+class ScanLogRequest(BaseModel):
+    server_id: int
+
+
+class AiPlanRequest(BaseModel):
+    server_id: int
+    # 可选: 缺失时在端点内显式返回 400(pydantic 必填缺失默认 422, 与契约不符)
+    strategy: Optional[Dict[str, Any]] = None
+
+
 # ---------------------------------------------------------------------------
 # 场景元数据
 # ---------------------------------------------------------------------------
@@ -62,7 +74,7 @@ def _scene_metadata() -> List[Dict[str, Any]]:
 
 @router.get("/scenes")
 def list_scenes(user: User = Depends(get_current_user)):
-    """返回 3 个自愈场景的元数据。"""
+    """返回全部自愈场景的元数据。"""
     return _scene_metadata()
 
 
@@ -88,18 +100,49 @@ def run_selfheal(req: SelfHealRunRequest, user: User = Depends(get_current_user)
 
 
 # ---------------------------------------------------------------------------
+# 通道二: 只读清单扫描 + AI 策略审批单
+# ---------------------------------------------------------------------------
+@router.post("/scan-log")
+def scan_log(req: ScanLogRequest, user: User = Depends(get_current_user)):
+    """触发只读清单扫描(通道二数据源)。"""
+    from hermes.tools.selfheal.inventory import scan_log_cleanup_handler
+    import json as _json
+    raw = scan_log_cleanup_handler({"server_id": req.server_id})
+    parsed = _json.loads(raw)
+    if "error" in parsed:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=parsed["error"])
+    return parsed
+
+
+@router.post("/ai-plan")
+def ai_plan(req: AiPlanRequest, user: User = Depends(get_current_user)):
+    """提交 AI 清理策略 JSON, 校验后生成 pending 审批单(plan_id 归组)。"""
+    from hermes.selfheal import ai_cleanup
+    if req.strategy is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="strategy 不能为空")
+    try:
+        return ai_cleanup.create_plan(req.server_id, req.strategy)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
 # 动作列表
 # ---------------------------------------------------------------------------
 @router.get("/actions")
 def list_actions(
     status_filter: Optional[str] = Query(default=None),
+    plan_id: Optional[str] = Query(default=None),
     user: User = Depends(get_current_user),
 ):
-    """按 created_at 倒序返回动作列表,最多 100 条,支持 status 过滤。"""
+    """按 created_at 倒序返回动作列表,最多 100 条,支持 status / plan_id 过滤。"""
     with db.session_scope() as s:
         q = s.query(SelfHealAction)
         if status_filter:
             q = q.filter(SelfHealAction.status == status_filter)
+        if plan_id:
+            q = q.filter(SelfHealAction.plan_id == plan_id)
         rows = q.order_by(SelfHealAction.created_at.desc()).limit(100).all()
         return [row.to_dict() for row in rows]
 

@@ -102,9 +102,9 @@ class ScenesEndpointTests(_SelfHealApiTestCase):
         r = self.client.get("/api/selfheal/scenes")
         self.assertEqual(r.status_code, 200)
         d = r.json()
-        self.assertEqual(len(d), 3)
+        self.assertEqual(len(d), 4)
         names = {item["name"] for item in d}
-        self.assertEqual(names, {"process_restart", "disk_clean", "cache_clean"})
+        self.assertEqual(names, {"process_restart", "disk_clean", "cache_clean", "log_cleanup_script"})
 
 
 class RunEndpointTests(_SelfHealApiTestCase):
@@ -300,6 +300,64 @@ class StatsTests(_SelfHealApiTestCase):
         self.assertEqual(d["success"], 0)
         self.assertEqual(d["success_rate"], 0.0)
         self.assertEqual(d["pending"], 0)
+
+
+class ScanLogEndpointTests(_SelfHealApiTestCase):
+    def test_scan_log_endpoint(self):
+        # 只读扫描: mock actions.exec_ssh 返回 7 条命令输出
+        outs = iter([
+            {"success": True, "exit_code": 0,
+             "stdout": "Filesystem Type Size Used Avail Use% Mounted on\n"
+                       "/dev/vda1 ext4 99G 84G 16G 85% /\n", "stderr": ""},
+            {"success": True, "exit_code": 0, "stdout": "journals take up 1.2G\n", "stderr": ""},
+            {"success": True, "exit_code": 0, "stdout": "", "stderr": ""},
+            {"success": True, "exit_code": 0, "stdout": "", "stderr": ""},
+            {"success": True, "exit_code": 0, "stdout": "", "stderr": ""},
+            {"success": True, "exit_code": 0, "stdout": "", "stderr": ""},
+            {"success": True, "exit_code": 0, "stdout": "", "stderr": ""},
+        ])
+        with patch("hermes.selfheal.actions.exec_ssh", side_effect=lambda *a, **k: next(outs)):
+            r = self.client.post("/api/selfheal/scan-log",
+                                 json={"server_id": self.server_id})
+        self.assertEqual(r.status_code, 200)
+        data = r.json()
+        self.assertIn("disk", data)
+        self.assertEqual(data["disk"]["/"]["use_pct"], 85)
+
+
+class AiPlanEndpointTests(_SelfHealApiTestCase):
+    def test_ai_plan_endpoint_generates_pending(self):
+        strategy = {"mount": "/", "items": [
+            {"type": "journal_vacuum", "size": "200"},
+            {"type": "truncate_file", "path": "/etc/passwd"},
+        ]}
+        r = self.client.post("/api/selfheal/ai-plan",
+                             json={"server_id": self.server_id, "strategy": strategy})
+        self.assertEqual(r.status_code, 200)
+        data = r.json()
+        self.assertEqual(data["accepted"], 1)
+        self.assertEqual(data["rejected"], 1)
+        self.assertIn("plan_id", data)
+
+    def test_ai_plan_missing_strategy_400(self):
+        r = self.client.post("/api/selfheal/ai-plan", json={"server_id": self.server_id})
+        self.assertEqual(r.status_code, 400)
+
+
+class PlanIdFilterTests(_SelfHealApiTestCase):
+    def test_actions_filter_by_plan_id(self):
+        from hermes.selfheal import ai_cleanup
+        strategy = {"mount": "/", "items": [
+            {"type": "journal_vacuum", "size": "200"},
+        ]}
+        # 归入不同 plan_id 的干扰动作: 若无 plan_id 过滤, 会被一并返回
+        ai_cleanup.create_plan(self.server_id, strategy, plan_id="plan-x")
+        ai_cleanup.create_plan(self.server_id, strategy, plan_id="plan-y")
+        r = self.client.get("/api/selfheal/actions?plan_id=plan-x")
+        self.assertEqual(r.status_code, 200)
+        rows = r.json()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["plan_id"], "plan-x")
 
 
 if __name__ == "__main__":
