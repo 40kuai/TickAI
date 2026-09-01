@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import secrets
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -20,13 +21,21 @@ from hermes.auth import validate_session
 from hermes.config.settings import get as settings_get
 from hermes.data.models import User
 
+logger = logging.getLogger(__name__)
+
 # ---------------------------------------------------------------------------
 # JWT configuration
 # ---------------------------------------------------------------------------
 # Secret is read from JWT_SECRET (env var or .env file, via settings.get).
-# If not set, a random value is generated on each startup (acceptable for
-# dev; in production always set JWT_SECRET so tokens survive restarts).
+# If not set, a random value is generated on each startup. In production the
+# operator MUST set JWT_SECRET — otherwise tokens do not survive restarts and
+# a multi-worker deployment cannot validate each other's tokens.
 JWT_SECRET: str = settings_get("JWT_SECRET") or secrets.token_urlsafe(32)
+if not settings_get("JWT_SECRET"):
+    logger.warning(
+        "JWT_SECRET 未配置，已生成随机密钥。生产环境必须设置 JWT_SECRET，"
+        "否则重启后所有登录态失效，且多 worker 之间无法互认 token。"
+    )
 JWT_ALGORITHM: str = "HS256"
 JWT_EXPIRE_HOURS: int = 24
 

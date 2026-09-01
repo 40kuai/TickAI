@@ -143,3 +143,9 @@ def FEISHU_OPENID_WHITELIST() -> list:
 def FEISHU_ENABLED() -> bool:
     """检查飞书是否已配置"""
     return bool(FEISHU_APP_ID() and FEISHU_APP_SECRET())
+
+
+# Cookie — Secure 标志（生产 HTTPS 必须开启）
+def COOKIE_SECURE() -> bool:
+    """会话 Cookie 是否带 Secure 标志。生产环境(HTTPS)应设为 true。"""
+    return get("COOKIE_SECURE", "false").lower() in ("1", "true", "yes")

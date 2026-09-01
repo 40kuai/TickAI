@@ -271,22 +271,29 @@ def _fetch_hosts(cfg) -> list:
 
 @router.get("/sync/config")
 def get_sync_config(user=Depends(get_current_user)):
-    """Get current sync configuration."""
+    """Get current sync configuration (secrets redacted)."""
     with session_scope() as s:
         cfg = _get_or_create_sync_config(s)
-        return cfg.to_dict()
+        return cfg.to_dict()  # redact_secrets=True by default
 
 
 @router.put("/sync/config")
 def update_sync_config(req: SyncConfigUpdate, user=Depends(get_current_user)):
-    """Save sync configuration."""
+    """Save sync configuration.
+
+    Secrets are only overwritten when the client sends a real value. The
+    redaction marker "***" (or empty) leaves the stored secret untouched, so
+    an already-loaded form does not clobber the saved credentials.
+    """
     with session_scope() as s:
         cfg = _get_or_create_sync_config(s)
         cfg.api_url = req.api_url
         cfg.auth_type = req.auth_type
         cfg.auth_username = req.auth_username
-        cfg.auth_password = req.auth_password
-        cfg.api_token = req.api_token
+        if req.auth_password not in ("", "***"):
+            cfg.auth_password = req.auth_password
+        if req.api_token not in ("", "***"):
+            cfg.api_token = req.api_token
         cfg.response_path = req.response_path
         cfg.timeout = req.timeout
         cfg.field_mapping = json.dumps(req.field_mapping, ensure_ascii=False)
@@ -296,13 +303,27 @@ def update_sync_config(req: SyncConfigUpdate, user=Depends(get_current_user)):
 
 @router.post("/sync/test")
 def test_sync(req: SyncTestRequest, user=Depends(get_current_user)):
-    """Test connection to external API. Returns preview without writing to DB."""
+    """Test connection to external API. Returns preview without writing to DB.
+
+    Secrets sent as the redaction marker "***" are resolved against the stored
+    config, so testing after loading a redacted form still authenticates.
+    """
+    auth_password = req.auth_password
+    api_token = req.api_token
+    if auth_password == "***" or api_token == "***":
+        with session_scope() as s:
+            stored = _get_or_create_sync_config(s)
+            if req.auth_password == "***":
+                auth_password = stored.auth_password
+            if req.api_token == "***":
+                api_token = stored.api_token
+
     cfg = SyncConfig(
         api_url=req.api_url,
         auth_type=req.auth_type,
         auth_username=req.auth_username,
-        auth_password=req.auth_password,
-        api_token=req.api_token,
+        auth_password=auth_password,
+        api_token=api_token,
         response_path=req.response_path,
         timeout=req.timeout,
         field_mapping=json.dumps(req.field_mapping),
@@ -341,8 +362,9 @@ def sync_servers(user=Depends(get_current_user)):
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="请先配置同步 API 地址",
             )
-        # Detach config values before session closes
-        cfg_data = cfg.to_dict()
+        # Detach config values before session closes (internal use only —
+        # needs the real secrets to authenticate against the external API)
+        cfg_data = cfg.to_dict(redact_secrets=False)
 
     # Build a temp config for fetching (outside session)
     temp_cfg = SyncConfig(

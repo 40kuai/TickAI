@@ -31,6 +31,7 @@ PATTERNS = [
 # 测试/示例中允许出现的假值与占位符
 ALLOWED = re.compile(
     r"sk-test|[\"']secret123[\"']|your_[a-z_]+_here|<your_[a-z_]+>|password=\s*[\"']x[\"']"
+    r"|admin-test-pw|supersecret|super-token"
 )
 
 

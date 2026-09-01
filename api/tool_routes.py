@@ -2,6 +2,10 @@
 
 All operations reuse the global registry singleton from
 hermes.tools.registry.
+
+Security: only chat-visible (whitelisted) tools may be run from the Tools
+page. Bare SSH tools that accept arbitrary host/password are rejected, and
+every executed tool is persisted to the audit log.
 """
 from __future__ import annotations
 
@@ -11,7 +15,7 @@ from typing import Any, Dict
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from hermes.tools.registry import registry
+from hermes.tools.registry import registry, is_chat_visible
 
 from .deps import get_current_user
 
@@ -24,17 +28,42 @@ class ToolRunRequest(BaseModel):
 
 @router.get("")
 def list_tools(user=Depends(get_current_user)):
-    """List all registered tool schemas."""
-    return registry.list_schemas()
+    """List registered tool schemas (chat-visible tools only)."""
+    return [
+        s for s in registry.list_schemas()
+        if is_chat_visible(s.get("name", ""))
+    ]
 
 
 @router.post("/{name}/run")
 def run_tool(name: str, req: ToolRunRequest, user=Depends(get_current_user)):
-    """Execute a registered tool by name with the given arguments."""
+    """Execute a chat-visible tool by name with the given arguments."""
     if not registry.has(name):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Tool '{name}' not found",
         )
+    # Authorization: reject non-whitelisted tools (e.g. bare-SSH tools that
+    # accept arbitrary host/password) — they are internal-only.
+    if not is_chat_visible(name):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Tool '{name}' is not allowed to be run from the Tools page",
+        )
     result_json = registry.dispatch(name, req.args)
+    # Audit: persist every manual tool run (best-effort, never breaks response).
+    try:
+        from hermes.tools.ssh.runner import persist_tool_run
+
+        sid = req.args.get("server_id")
+        if isinstance(sid, bool) or not isinstance(sid, int) or sid <= 0:
+            sid = None
+        persist_tool_run(
+            server_id=sid,
+            command_label=name,
+            result_json=result_json,
+            triggered_by="user_button",
+        )
+    except Exception:  # noqa: BLE001
+        pass
     return json.loads(result_json)

@@ -109,5 +109,54 @@ class ToolRegistry:
             return tool_error(f"handler raised {type(exc).__name__}: {exc}")
 
 
+# ============================================================
+# AI operation scope — chat-visible tools whitelist
+# ============================================================
+# The conversational LLM (Web / Feishu) and the Tools page's manual run
+# endpoint must NOT be able to invoke every registered tool. Specifically,
+# the "bare" SSH tools (check_resources / list_services) accept arbitrary
+# host + username + password and would let the LLM connect to any host with
+# caller-supplied credentials — bypassing the server_id-based credential
+# isolation. The LLM should only reach servers through the *_on_server
+# wrappers (which resolve credentials from the DB) plus read-only
+# observability / query tools.
+CHAT_VISIBLE_TOOLS: tuple[str, ...] = (
+    # DB / server inventory
+    "list_servers",
+    "query_runs",
+    # SSH via server_id (credentials resolved from DB, never host/password)
+    "check_disk_usage",
+    "check_resources_on_server",
+    "list_services_on_server",
+    # K8s read-only
+    "check_k8s_nodes",
+    "check_k8s_pods",
+    "check_k8s_events",
+    "check_k8s_deployments",
+    "check_k8s_services",
+    "list_k8s_contexts",
+    # LDAP user lookup
+    "ldap_search_user",
+    # Observability (read-only)
+    "prometheus_service_discovery",
+    "prometheus_service_health",
+    "prometheus_metric_query",
+    "nightingale_history_alerts",
+    "nightingale_active_alerts",
+    "jenkins_service_jobs",
+    "jenkins_build_records",
+    # Skill execution
+    "run_skill",
+)
+
+
+def is_chat_visible(name: str) -> bool:
+    """Whether a tool may be exposed to the conversational LLM / Tools page.
+
+    Default-deny: any tool not explicitly whitelisted is NOT visible.
+    """
+    return name in CHAT_VISIBLE_TOOLS
+
+
 # Process-wide singleton — tools import this directly
 registry = ToolRegistry()
