@@ -74,6 +74,8 @@ def _make_client(transport, verbose: bool = False) -> TokenHubClient:
     client.model = "deepseek-v4-flash"
     client.timeout = 5.0
     client.verbose = verbose
+    client.max_retries = 2
+    client.retry_backoff = 0.05
     client._client = httpx.Client(transport=transport)
     return client
 
@@ -336,6 +338,63 @@ class TokenHubClientChatTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 client.chat([{"role": "user", "content": "x"}])
         self.assertEqual(buf.getvalue(), "")
+
+
+class TokenHubClientRetryTests(unittest.TestCase):
+    """传输层瞬时错误(如 TLS EOF)应触发指数退避重试。"""
+
+    def test_retries_then_succeeds_on_transient_error(self):
+        # 第一次请求抛 TLS EOF,第二次成功 → 重试后正常返回
+        attempts = {"n": 0}
+
+        def responder(req):
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                raise httpx.RemoteProtocolError("EOF occurred in violation of protocol")
+            return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+        transport = _MockTransport(responder)
+        client = _make_client(transport, verbose=True)
+        client.max_retries = 3
+        client.retry_backoff = 0.01
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            out = client.chat([{"role": "user", "content": "ping"}])
+        self.assertEqual(out["choices"][0]["message"]["content"], "ok")
+        self.assertEqual(len(transport.requests), 2)
+        self.assertIn("RETRY", buf.getvalue())
+
+    def test_retries_exhausted_raises(self):
+        attempts = {"n": 0}
+
+        def responder(req):
+            attempts["n"] += 1
+            raise httpx.RemoteProtocolError("EOF occurred in violation of protocol")
+
+        transport = _MockTransport(responder)
+        client = _make_client(transport, verbose=False)
+        client.max_retries = 2
+        client.retry_backoff = 0.01
+        with self.assertRaises(httpx.RemoteProtocolError):
+            client.chat([{"role": "user", "content": "x"}])
+        # 初始 1 次 + 2 次重试
+        self.assertEqual(attempts["n"], 3)
+
+    def test_http_4xx_not_retried(self):
+        # HTTP 4xx(如鉴权失败)不是瞬时错误,不应重试
+        attempts = {"n": 0}
+
+        def responder(req):
+            attempts["n"] += 1
+            return httpx.Response(401, text="invalid api key")
+
+        transport = _MockTransport(responder)
+        client = _make_client(transport, verbose=False)
+        client.max_retries = 3
+        client.retry_backoff = 0.01
+        with self.assertRaises(RuntimeError):
+            client.chat([{"role": "user", "content": "x"}])
+        self.assertEqual(attempts["n"], 1)
 
 
 if __name__ == "__main__":

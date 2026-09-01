@@ -14,6 +14,8 @@ import httpx
 DEFAULT_BASE_URL = "https://tokenhub.tencentmaas.com/plan/v3"
 DEFAULT_MODEL = "deepseek-v4-flash"
 HTTP_TIMEOUT_SECONDS = 60.0
+DEFAULT_MAX_RETRIES = 2
+DEFAULT_RETRY_BACKOFF = 2.0
 
 
 class TokenHubClient:
@@ -21,7 +23,8 @@ class TokenHubClient:
 
     def __init__(self, api_key: str, base_url: str = DEFAULT_BASE_URL,
                  model: str = DEFAULT_MODEL, timeout: float = HTTP_TIMEOUT_SECONDS,
-                 verbose: bool = True):
+                 verbose: bool = True, max_retries: int = DEFAULT_MAX_RETRIES,
+                 retry_backoff: float = DEFAULT_RETRY_BACKOFF):
         if not api_key:
             raise ValueError("TOKENHUB_API_KEY is required")
         self.api_key = api_key
@@ -29,6 +32,8 @@ class TokenHubClient:
         self.model = model
         self.timeout = timeout
         self.verbose = verbose
+        self.max_retries = max_retries
+        self.retry_backoff = retry_backoff
         self._client: Optional[httpx.Client] = None
 
     def _endpoint(self) -> str:
@@ -40,7 +45,11 @@ class TokenHubClient:
         return self._client
 
     def chat(self, messages, tools=None) -> Dict[str, Any]:
-        """POST a chat completion request. Returns the raw JSON dict."""
+        """POST a chat completion request. Returns the raw JSON dict.
+
+        Transient transport errors (e.g. TLS EOF from the upstream proxy
+        dropping the connection) are retried with exponential backoff.
+        """
         payload = {"model": self.model, "messages": messages, "stream": False}
         if tools:
             payload["tools"] = tools
@@ -50,22 +59,40 @@ class TokenHubClient:
         }
         endpoint = self._endpoint()
 
-        t0 = time.perf_counter()
-        client = self._get_client()
-        try:
-            resp = client.post(endpoint, headers=headers, json=payload)
-            elapsed_ms = int((time.perf_counter() - t0) * 1000)
-            if resp.status_code >= 400:
-                raise RuntimeError(
-                    f"TokenHub HTTP {resp.status_code}: {resp.text[:500]} "
-                    f"(elapsed={elapsed_ms}ms)"
-                )
-            return resp.json()
-        except Exception as exc:
-            elapsed_ms = int((time.perf_counter() - t0) * 1000)
-            if self.verbose:
-                print(f"[LLM ERROR] ({elapsed_ms}ms) {exc}", flush=True)
-            raise
+        last_exc: Optional[Exception] = None
+        for attempt in range(self.max_retries + 1):
+            t0 = time.perf_counter()
+            try:
+                client = self._get_client()
+                resp = client.post(endpoint, headers=headers, json=payload)
+                elapsed_ms = int((time.perf_counter() - t0) * 1000)
+                if resp.status_code >= 400:
+                    raise RuntimeError(
+                        f"TokenHub HTTP {resp.status_code}: {resp.text[:500]} "
+                        f"(elapsed={elapsed_ms}ms)"
+                    )
+                return resp.json()
+            except httpx.TransportError as exc:
+                last_exc = exc
+                elapsed_ms = int((time.perf_counter() - t0) * 1000)
+                if attempt < self.max_retries:
+                    delay = self.retry_backoff * (2 ** attempt)
+                    if self.verbose:
+                        print(
+                            f"[LLM RETRY] attempt {attempt + 1}/{self.max_retries} "
+                            f"failed ({elapsed_ms}ms): {exc}; retry in {delay:.1f}s",
+                            flush=True,
+                        )
+                    time.sleep(delay)
+                    continue
+                if self.verbose:
+                    print(f"[LLM ERROR] ({elapsed_ms}ms) {exc}", flush=True)
+                raise
+            except Exception as exc:  # noqa: BLE001
+                elapsed_ms = int((time.perf_counter() - t0) * 1000)
+                if self.verbose:
+                    print(f"[LLM ERROR] ({elapsed_ms}ms) {exc}", flush=True)
+                raise
 
     def chat_stream(self, messages, tools=None):
         """Streaming chat completion. Yields delta dicts from each SSE chunk.
