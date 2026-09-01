@@ -15,9 +15,9 @@ from hermes.tools.registry import registry, tool_error, tool_result
 _PROBE_COMMANDS = [
     ("df", "df -Th /"),
     ("journal", "journalctl --disk-usage 2>/dev/null || true"),
-    ("var_log", "find /var/log -maxdepth 2 -type f -size +50M 2>/dev/null"),
-    ("service", "find /data -maxdepth 3 -type f -path '*/logs/*' -size +50M 2>/dev/null"),
-    ("docker_log", "find /var/lib/docker/containers -maxdepth 2 -name '*-json.log' -size +50M 2>/dev/null"),
+    ("var_log", "find /var/log -maxdepth 2 -type f -size +50M 2>/dev/null | head -50"),
+    ("service", "find /data -maxdepth 3 -type f -path '*/logs/*' -size +50M 2>/dev/null | head -50"),
+    ("docker_log", "find /var/lib/docker/containers -maxdepth 2 -name '*-json.log' -size +50M 2>/dev/null | head -50"),
     ("docker_ps", "docker ps -a --format '{{.Names}} {{.Image}} {{.Status}}' 2>/dev/null | head -50"),
     ("docker_images", "docker images --format '{{.Repository}} {{.Tag}} {{.ID}} {{.CreatedAt}} {{.Size}}' 2>/dev/null | head -50"),
 ]
