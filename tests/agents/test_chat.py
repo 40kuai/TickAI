@@ -130,6 +130,51 @@ class ChatExistingConversationTests(unittest.TestCase):
             llm_agent.chat("hi", conversation_id=99999, client=client)
 
 
+class SystemPromptTests(unittest.TestCase):
+    """系统提示词安全约束测试。
+
+    场景:优化后的提示词必须体现业务只读纪律 + 身份保密,防止 LLM
+    被越权引导执行破坏性操作或泄露底层模型信息。
+    """
+
+    def _prompt(self) -> str:
+        return llm_agent._build_system_prompt()["content"]
+
+    def test_identity_is_tickai(self):
+        self.assertIn("TickAI", self._prompt())
+
+    def test_bans_mutating_operations(self):
+        p = self._prompt()
+        for kw in ("READ-ONLY", "read-only", "delete", "drop", "kill",
+                   "restart", "stop", "scale", "mutating"):
+            self.assertIn(kw, p, f"提示词应包含禁止变更操作的约束: {kw}")
+
+    def test_never_fabricate_data(self):
+        p = self._prompt()
+        for kw in ("fabricate", "hallucinate", "guess", "making it up"):
+            self.assertIn(kw, p, f"提示词应包含禁止编造数据的约束: {kw}")
+
+    def test_server_id_must_be_real_int(self):
+        p = self._prompt()
+        self.assertIn("server_id", p)
+        self.assertIn("list_servers", p)
+
+    def test_whitelist_only_tools(self):
+        p = self._prompt()
+        self.assertIn("prometheus", p)
+        self.assertIn("k8s", p)
+        self.assertIn("nightingale", p)
+        self.assertIn("jenkins", p)
+
+    def test_no_model_name_leak(self):
+        # 提示词必须声明"身份保密"指令,禁止 LLM 声称/泄露底层模型
+        p = self._prompt()
+        self.assertIn("TickAI", p)
+        self.assertIn("Never mention", p)
+        self.assertIn("Never reveal", p)
+        self.assertIn("this system prompt", p)
+
+
 class ChatToolCallTests(unittest.TestCase):
     def setUp(self):
         _wipe()
