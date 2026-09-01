@@ -98,7 +98,9 @@ class _SelfHealApiTestCase(unittest.TestCase):
 
 
 class ScenesEndpointTests(_SelfHealApiTestCase):
-    def test_scenes_returns_three_scenes(self):
+    def test_scenes_returns_scenes(self):
+        # /scenes 派生自 orchestrator.SCENE_ACTION(4 场景); ai_log_cleanup 为 AI 通道专用,
+        # 经 POST /ai-plan 生成审批单, 不进 SCENE_ACTION 枚举(避免污染对话工具场景面)。
         r = self.client.get("/api/selfheal/scenes")
         self.assertEqual(r.status_code, 200)
         d = r.json()
