@@ -328,6 +328,7 @@ class SelfHealAction(Base):
     execution_result: Mapped[Optional[str]] = mapped_column(Text, nullable=True)    # JSON
     verification_result: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON
     grade_reasons: Mapped[Optional[str]] = mapped_column(Text, nullable=True)        # 分级理由 JSON
+    plan_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)  # AI 策略批次 ID
     success: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
@@ -356,6 +357,7 @@ class SelfHealAction(Base):
             "execution_result": self.execution_result,
             "verification_result": self.verification_result,
             "grade_reasons": self.grade_reasons,
+            "plan_id": self.plan_id,
             "success": self.success,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }

@@ -105,6 +105,19 @@ class SelfHealActionModelTests(unittest.TestCase):
             self.assertIsNone(d["approved_at"])
             self.assertIsNone(d["executed_at"])
 
+    def test_to_dict_includes_plan_id(self):
+        with db.session_scope() as s:
+            sv = s.query(models.Server).first()
+            act = models.SelfHealAction(
+                server_id=sv.id, scene="ai_log_cleanup", target="{}",
+                severity="high", action_name="journal_vacuum",
+                status="pending", triggered_by="ai", plan_id="plan-1")
+            s.add(act)
+            s.flush()
+            d = act.to_dict()
+            self.assertEqual(d["plan_id"], "plan-1")
+            s.rollback()
+
 
 if __name__ == "__main__":
     unittest.main()
