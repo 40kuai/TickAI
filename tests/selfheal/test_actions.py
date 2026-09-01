@@ -109,5 +109,83 @@ class ExecSshTests(unittest.TestCase):
         self.assertEqual(r["exit_code"], 0)
 
 
+class CleanupActionTests(unittest.TestCase):
+    def setUp(self):
+        os.environ["SELFHEAL_SERVICE_WHITELIST"] = "nginx,redis"
+        os.environ["SELFHEAL_LOG_PATH_WHITELIST"] = "/var/log/nginx/access.log"
+        os.environ["SELFHEAL_DROPCACHES_MODES_WHITELIST"] = "1,2,3"
+        os.environ["SELFHEAL_LOG_CLEANUP_CATEGORIES_WHITELIST"] = "system,service,docker-log,docker-prune"
+        config.reload_config()
+
+    def tearDown(self):
+        os.environ.pop("SELFHEAL_LOG_CLEANUP_CATEGORIES_WHITELIST", None)
+        config.reload_config()
+
+    def test_run_cleanup_script_allowed(self):
+        cmd = actions.render_command("run_cleanup_script", {"category": "system"})
+        # 含 env 阈值前缀 + bash -s -- system
+        self.assertIn("JOURNAL_VACUUM_SIZE_MB=", cmd)
+        self.assertTrue(cmd.endswith("bash -s -- system"))
+
+    def test_run_cleanup_script_rejects_bad(self):
+        with self.assertRaises(ValueError):
+            actions.render_command("run_cleanup_script", {"category": "rm -rf"})
+
+    def test_journal_vacuum_allowed(self):
+        cmd = actions.render_command("journal_vacuum", {"size": "200"})
+        self.assertEqual(cmd, "journalctl --vacuum-size=200M")
+
+    def test_journal_vacuum_rejects_bad(self):
+        with self.assertRaises(ValueError):
+            actions.render_command("journal_vacuum", {"size": "abc"})
+
+    def test_docker_log_truncate_allowed(self):
+        p = "/var/lib/docker/containers/abc/abc-json.log"
+        cmd = actions.render_command("docker_log_truncate", {"path": p})
+        self.assertEqual(cmd, f"truncate -s 0 {p}")
+
+    def test_docker_log_truncate_rejects_outside_prefix(self):
+        with self.assertRaises(ValueError):
+            actions.render_command("docker_log_truncate", {"path": "/etc/passwd"})
+
+    def test_docker_log_truncate_rejects_shell_injection(self):
+        # 前缀正确但含 shell 元字符 → 正则全匹配拦截(防注入绕过)
+        p = "/var/lib/docker/containers/abc/abc-json.log; curl evil|x"
+        with self.assertRaises(ValueError):
+            actions.render_command("docker_log_truncate", {"path": p})
+        p2 = "/var/lib/docker/containers/abc/abc-json.log "
+        with self.assertRaises(ValueError):
+            actions.render_command("docker_log_truncate", {"path": p2})
+
+    def test_exec_action_dispatches_cleanup_script(self):
+        with patch("hermes.selfheal.actions.get_server_ssh_args",
+                   return_value=("10.0.0.1", {"port": 22, "username": "root",
+                                              "password": "x"}, "web-01")), \
+             patch("hermes.selfheal.actions._connect_exec",
+                   return_value={"success": True, "exit_code": 0,
+                                 "stdout": "[cleanup] done", "stderr": ""}) as ce:
+            r = actions.exec_action(1, "run_cleanup_script",
+                                    actions.render_command("run_cleanup_script", {"category": "system"}),
+                                    {"category": "system"})
+        self.assertTrue(r["success"])
+        # stdin_data 必须携带脚本内容
+        self.assertIn("clean_system", ce.call_args.kwargs["stdin_data"])
+
+    def test_exec_action_unknown_action_raises(self):
+        # 未知 action 绝不静默执行任意命令
+        with self.assertRaises(ValueError):
+            actions.exec_action(1, "nope", "rm -rf /", {})
+
+    def test_exec_action_regular_action_uses_exec_ssh(self):
+        # 非脚本类动作走通用 exec_ssh(不注入 stdin)
+        with patch("hermes.selfheal.actions.exec_ssh",
+                   return_value={"success": True, "exit_code": 0,
+                                 "stdout": "ok", "stderr": ""}) as es:
+            r = actions.exec_action(1, "journal_vacuum", "journalctl --vacuum-size=200M",
+                                    {"size": "200"})
+        self.assertTrue(r["success"])
+        es.assert_called_once_with(1, "journalctl --vacuum-size=200M", timeout=60)
+
+
 if __name__ == "__main__":
     unittest.main()
