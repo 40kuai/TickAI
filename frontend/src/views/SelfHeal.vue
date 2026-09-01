@@ -288,6 +288,7 @@ async function handleAiPlan() {
   if (aiPlanRunning.value) return
   aiPlanError.value = ''
   aiPlanResult.value = null
+  if (!cleanupForm.server_id) { aiPlanError.value = '请选择服务器'; return }
   let strategy
   try {
     strategy = strategyJson.value.trim() ? JSON.parse(strategyJson.value.trim()) : {}
@@ -428,7 +429,7 @@ onMounted(loadAll)
         <button class="btn btn-outline" :disabled="scanRunning" @click="handleScan">
           {{ scanRunning ? '扫描中…' : '🔍 只读扫描' }}
         </button>
-        <button class="btn btn-outline" :disabled="scanRunning" @click="fillStrategyExample">
+        <button class="btn btn-outline" :disabled="scanRunning || !scanResult" @click="fillStrategyExample">
           填充策略示例
         </button>
       </div>
