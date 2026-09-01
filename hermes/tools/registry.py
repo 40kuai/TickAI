@@ -149,6 +149,8 @@ CHAT_VISIBLE_TOOLS: tuple[str, ...] = (
     "run_skill",
     # 受控自愈闭环(探测→分级→低危自主/高危审批→验证,写命令限模板白名单)
     "run_selfheal",
+    # 只读日志/磁盘/容器清单扫描(通道二 AI 分析数据源)
+    "scan_log_cleanup",
 )
 
 
