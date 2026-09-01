@@ -40,7 +40,7 @@ class SchemaTests(unittest.TestCase):
         self.assertEqual(props["server_id"]["type"], "integer")
         self.assertEqual(
             props["scene"]["enum"],
-            list(orchestrator.SCENE_ACTION),
+            [*orchestrator.SCENE_ACTION],
         )
         self.assertEqual(props["target"]["type"], "object")
 
