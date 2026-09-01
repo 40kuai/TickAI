@@ -19,6 +19,7 @@ Path("/tmp/opsticket_test").mkdir(parents=True, exist_ok=True)
 # import hermes.tools 会触发 auto_register_tools 自动注册(run_selfheal 由
 # hermes/tools/selfheal/tools.py 注册);再显式 import 目标模块保证确定性。
 import hermes.tools  # noqa: F401, E402
+from hermes.selfheal import orchestrator  # noqa: E402
 from hermes.tools.registry import is_chat_visible, registry  # noqa: E402
 from hermes.tools.selfheal import tools as selfheal_tools  # noqa: E402
 
@@ -39,7 +40,7 @@ class SchemaTests(unittest.TestCase):
         self.assertEqual(props["server_id"]["type"], "integer")
         self.assertEqual(
             props["scene"]["enum"],
-            ["process_restart", "disk_clean", "cache_clean"],
+            list(orchestrator.SCENE_ACTION),
         )
         self.assertEqual(props["target"]["type"], "object")
 
