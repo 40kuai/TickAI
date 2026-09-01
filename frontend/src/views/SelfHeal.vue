@@ -29,11 +29,16 @@ const SCENE_LABELS = {
   process_restart: '进程重启',
   disk_clean: '磁盘清理',
   cache_clean: '缓存清理',
+  log_cleanup_script: '日志清理(固定脚本)',
+  ai_log_cleanup: '日志清理(AI分析)',
 }
 const ACTION_LABELS = {
   restart_service: '重启服务',
   truncate_log: '截断日志',
   clean_cache: '清理缓存',
+  run_cleanup_script: '清理脚本',
+  journal_vacuum: 'journal 压缩',
+  docker_log_truncate: 'Docker 日志截断',
 }
 const STATUS_LABELS = {
   verified: '已验证',
@@ -219,6 +224,106 @@ async function handleReject(item) {
   }
 }
 
+// ====== 日志清理(通道一固定脚本 + 通道二AI分析) ======
+const cleanupForm = reactive({ server_id: '', category: 'system' })
+const CLEANUP_CATEGORIES = [
+  { value: 'system', label: '系统日志' },
+  { value: 'service', label: '服务日志 /data/*/logs' },
+  { value: 'docker-log', label: 'Docker 日志' },
+  { value: 'docker-prune', label: 'Docker 容器/镜像回收' },
+  { value: 'all', label: '全部' },
+]
+const cleanupRunning = ref(false)
+const cleanupError = ref('')
+const cleanupResult = ref(null)
+const scanRunning = ref(false)
+const scanResult = ref(null)
+const scanError = ref('')
+const aiPlanRunning = ref(false)
+const aiPlanError = ref('')
+const aiPlanResult = ref(null)
+const strategyJson = ref('')
+
+// 触发固定清理脚本(生成审批单)
+async function handleCleanup() {
+  if (cleanupRunning.value) return
+  cleanupError.value = ''
+  cleanupResult.value = null
+  if (!cleanupForm.server_id) { cleanupError.value = '请选择服务器'; return }
+  cleanupRunning.value = true
+  try {
+    const res = await api.post('/selfheal/run', {
+      server_id: Number(cleanupForm.server_id),
+      scene: 'log_cleanup_script',
+      target: { category: cleanupForm.category, mount: '/' },
+    })
+    cleanupResult.value = res.data
+    await refreshActionsAndStats()
+  } catch (err) {
+    cleanupError.value = err.response?.data?.detail || '触发清理失败'
+  } finally {
+    cleanupRunning.value = false
+  }
+}
+
+// 只读扫描
+async function handleScan() {
+  if (scanRunning.value) return
+  scanError.value = ''
+  scanResult.value = null
+  if (!cleanupForm.server_id) { scanError.value = '请选择服务器'; return }
+  scanRunning.value = true
+  try {
+    const res = await api.post('/selfheal/scan-log', { server_id: Number(cleanupForm.server_id) })
+    scanResult.value = res.data
+  } catch (err) {
+    scanError.value = err.response?.data?.detail || '扫描失败'
+  } finally {
+    scanRunning.value = false
+  }
+}
+
+// 提交 AI 策略(生成审批单)
+async function handleAiPlan() {
+  if (aiPlanRunning.value) return
+  aiPlanError.value = ''
+  aiPlanResult.value = null
+  let strategy
+  try {
+    strategy = strategyJson.value.trim() ? JSON.parse(strategyJson.value.trim()) : {}
+  } catch {
+    aiPlanError.value = '策略必须是合法 JSON'
+    return
+  }
+  aiPlanRunning.value = true
+  try {
+    const res = await api.post('/selfheal/ai-plan', {
+      server_id: Number(cleanupForm.server_id),
+      strategy,
+    })
+    aiPlanResult.value = res.data
+    await refreshActionsAndStats()
+  } catch (err) {
+    aiPlanError.value = err.response?.data?.detail || '提交策略失败'
+  } finally {
+    aiPlanRunning.value = false
+  }
+}
+
+// 把扫描结果预填为策略示例(帮助用户手写/让 LLM 出策略)
+function fillStrategyExample() {
+  const items = []
+  if (scanResult.value?.journal?.disk_used) {
+    items.push({ type: 'journal_vacuum', size: '200' })
+  }
+  if (scanResult.value?.docker_logs?.length) {
+    for (const dl of scanResult.value.docker_logs.slice(0, 3)) {
+      items.push({ type: 'docker_log_truncate', path: dl.path })
+    }
+  }
+  strategyJson.value = JSON.stringify({ mount: '/', items }, null, 2)
+}
+
 onMounted(loadAll)
 </script>
 
@@ -290,6 +395,72 @@ onMounted(loadAll)
           <button class="result-close" @click="runResult = null">×</button>
         </div>
         <pre class="result-pre">{{ JSON.stringify(runResult, null, 2) }}</pre>
+      </div>
+    </div>
+
+    <!-- 日志清理(通道一固定脚本 + 通道二AI分析) -->
+    <div class="card">
+      <h3 class="card-title">日志清理</h3>
+      <div class="form-grid">
+        <div class="form-group">
+          <label class="form-label">服务器 *</label>
+          <select v-model="cleanupForm.server_id" class="form-select">
+            <option value="">请选择服务器</option>
+            <option v-for="s in servers" :key="s.id" :value="s.id">
+              {{ s.name }}（{{ s.host }}）
+            </option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">清理类别</label>
+          <select v-model="cleanupForm.category" class="form-select">
+            <option v-for="c in CLEANUP_CATEGORIES" :key="c.value" :value="c.value">
+              {{ c.label }}
+            </option>
+          </select>
+        </div>
+      </div>
+      <div v-if="cleanupError" class="error-tip">{{ cleanupError }}</div>
+      <div class="form-actions">
+        <button class="btn btn-primary" :disabled="cleanupRunning" @click="handleCleanup">
+          {{ cleanupRunning ? '触发中…' : '▶ 触发固定清理(生成审批单)' }}
+        </button>
+        <button class="btn btn-outline" :disabled="scanRunning" @click="handleScan">
+          {{ scanRunning ? '扫描中…' : '🔍 只读扫描' }}
+        </button>
+        <button class="btn btn-outline" :disabled="scanRunning" @click="fillStrategyExample">
+          填充策略示例
+        </button>
+      </div>
+
+      <!-- 扫描结果 -->
+      <div v-if="scanError" class="error-tip">{{ scanError }}</div>
+      <div v-if="scanResult" class="result-box">
+        <div class="result-head">
+          <span class="result-title">扫描结果</span>
+          <button class="result-close" @click="scanResult = null">×</button>
+        </div>
+        <pre class="result-pre">{{ JSON.stringify(scanResult, null, 2) }}</pre>
+      </div>
+
+      <!-- AI 策略 -->
+      <div class="form-group" style="margin-top: 12px">
+        <label class="form-label">AI 清理策略（JSON，每项映射到白名单模板）</label>
+        <textarea v-model="strategyJson" class="form-input" rows="5"
+          placeholder='{"mount": "/", "items": [{"type": "journal_vacuum", "size": "200"}]}'></textarea>
+      </div>
+      <div v-if="aiPlanError" class="error-tip">{{ aiPlanError }}</div>
+      <div class="form-actions">
+        <button class="btn btn-primary" :disabled="aiPlanRunning" @click="handleAiPlan">
+          {{ aiPlanRunning ? '提交中…' : '提交 AI 策略(生成审批单)' }}
+        </button>
+      </div>
+      <div v-if="aiPlanResult" class="result-box">
+        <div class="result-head">
+          <span class="result-title">AI 策略结果</span>
+          <button class="result-close" @click="aiPlanResult = null">×</button>
+        </div>
+        <pre class="result-pre">{{ JSON.stringify(aiPlanResult, null, 2) }}</pre>
       </div>
     </div>
 
@@ -535,5 +706,12 @@ onMounted(loadAll)
   .form-grid {
     grid-template-columns: 1fr;
   }
+}
+
+.form-input textarea,
+textarea.form-input {
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
 }
 </style>
