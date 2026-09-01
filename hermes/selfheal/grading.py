@@ -55,6 +55,10 @@ def grade(
         else:
             reasons.append(f"缓存内存使用率 {value:.1f}% 低于低危阈值 {config.CACHE_LOW_PCT}%")
 
+    elif scene in ("log_cleanup_script", "ai_log_cleanup"):
+        severity, can_auto = "high", False
+        reasons.append("日志清理为写操作, 统一人工审批")
+
     elif scene == "process_restart":
         if _is_peak_hour(now):
             severity, can_auto = "high", False

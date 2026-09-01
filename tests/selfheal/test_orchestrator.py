@@ -204,5 +204,63 @@ class RunCacheTests(_SelfHealTestCase):
         self.assertEqual(result["action_name"], "clean_cache")
 
 
+class CleanupSceneTests(_SelfHealTestCase):
+    def setUp(self):
+        super().setUp()
+        os.environ["SELFHEAL_LOG_PATH_WHITELIST"] = "/var/log/nginx/access.log"
+        os.environ["SELFHEAL_LOG_CLEANUP_CATEGORIES_WHITELIST"] = "system,service,docker-log,docker-prune"
+        config.reload_config()
+
+    def test_log_cleanup_script_always_pending(self):
+        # 磁盘 85%(低危区间), 但 log_cleanup_script 恒高危 → 落审批单, 不执行
+        with _mock_exec([
+                {"success": True, "exit_code": 0,
+                 "stdout": "Filesystem Type Size Used Avail Use% Mounted on\n"
+                           "/dev/vda1 ext4 50G 42G 8G 85% /\n", "stderr": ""},
+        ]):
+            result = orchestrator.run_selfheal(
+                1, "log_cleanup_script", {"category": "system", "mount": "/"}, "user")
+        self.assertEqual(result["severity"], "high")
+        self.assertEqual(result["status"], "pending")
+        self.assertFalse(result["success"])
+
+    def test_verify_recovered_disk_dropped(self):
+        # ai_log_cleanup: 基线 92% → 执行后 70% (下降) → recovered
+        recovered = orchestrator.verify_recovered(
+            "ai_log_cleanup", {"mount": "/"},
+            "Filesystem Type Size Used Avail Use% Mounted on\n"
+            "/dev/vda1 ext4 50G 35G 15G 70% /\n",
+            baseline_pct=92)
+        self.assertTrue(recovered)
+
+    def test_verify_recovered_disk_risen_false(self):
+        # 执行后反而升高 → 未恢复
+        recovered = orchestrator.verify_recovered(
+            "ai_log_cleanup", {"mount": "/"},
+            "Filesystem Type Size Used Avail Use% Mounted on\n"
+            "/dev/vda1 ext4 50G 48G 2G 96% /\n",
+            baseline_pct=92)
+        self.assertFalse(recovered)
+
+    def test_execute_and_verify_cleanup_baseline(self):
+        # approve 路径: 基线探测(92%) → 执行脚本 → 复探(70%) → verified
+        with _mock_exec([
+                {"success": True, "exit_code": 0,
+                 "stdout": "Filesystem Type Size Used Avail Use% Mounted on\n"
+                           "/dev/vda1 ext4 50G 46G 4G 92% /\n", "stderr": ""},  # baseline
+                {"success": True, "exit_code": 0, "stdout": "[cleanup] done", "stderr": ""},  # exec
+                {"success": True, "exit_code": 0,
+                 "stdout": "Filesystem Type Size Used Avail Use% Mounted on\n"
+                           "/dev/vda1 ext4 50G 35G 15G 70% /\n", "stderr": ""},  # verify
+        ]):
+            record = orchestrator._persist(
+                1, "ai_log_cleanup", {"mount": "/", "size": "200"}, "high",
+                "journal_vacuum", "pending", "ai")
+            row = orchestrator.execute_and_verify(
+                record, {"mount": "/", "size": "200"}, "journalctl --vacuum-size=200M")
+        self.assertEqual(row.status, "verified")
+        self.assertTrue(row.success)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -21,25 +21,40 @@ SCENE_ACTION = {
     "process_restart": "restart_service",
     "disk_clean": "truncate_log",
     "cache_clean": "clean_cache",
+    "log_cleanup_script": "run_cleanup_script",
 }
+
+# 清理类场景: 验证语义 = 磁盘使用率较执行前下降
+CLEANUP_SCENES = ("log_cleanup_script", "ai_log_cleanup")
 
 # 各场景 target 必填 key（缺失直接抛 ValueError，由顶层 catch 兜底落库）
 REQUIRED_TARGET_KEYS = {
     "process_restart": ("service",),
     "disk_clean": ("mount", "path"),
     "cache_clean": ("mode",),
+    "log_cleanup_script": ("category", "mount"),
 }
 
 
 def _probe_metric(scene: str, target: Dict[str, Any], out: str) -> Any:
     if scene == "disk_clean":
         return detect.parse_df_usage(out, target.get("mount", ""))
+    if scene in ("log_cleanup_script", "ai_log_cleanup"):
+        return detect.parse_df_usage(out, target.get("mount", ""))
     if scene == "cache_clean":
         return detect.parse_meminfo(out).get("pct")
     return None
 
 
-def verify_recovered(scene: str, target: Dict[str, Any], out: str) -> bool:
+def verify_recovered(scene: str, target: Dict[str, Any], out: str,
+                     baseline_pct: Optional[int] = None) -> bool:
+    if scene in ("log_cleanup_script", "ai_log_cleanup"):
+        pct = detect.parse_df_usage(out, target.get("mount", ""))
+        if pct is None:
+            return False
+        if baseline_pct is None:
+            return pct < config.DISK_LOW_PCT  # 无基线时退化为绝对阈值
+        return pct < baseline_pct
     if scene == "process_restart":
         return detect.parse_systemctl_active(out)
     if scene == "disk_clean":
@@ -106,8 +121,8 @@ def _run(
         scene == "process_restart"
         and not detect.parse_systemctl_active(probe["stdout"])
     ) or (
-        scene == "disk_clean" and metric is not None
-        and metric >= config.DISK_LOW_PCT
+        scene in ("disk_clean", "log_cleanup_script", "ai_log_cleanup")
+        and metric is not None and metric >= config.DISK_LOW_PCT
     ) or (
         scene == "cache_clean" and metric is not None
         and metric >= config.CACHE_LOW_PCT
@@ -165,17 +180,27 @@ def execute_and_verify(record, target, command, approver=None):
     record: 已落库的 SelfHealAction(含 id/server_id/scene/action_name)。
     command: 已渲染的白名单命令。
     approver: 审批人用户名,审批路径传入并记录 approver/approved_at。
-    流程: exec 写命令 → 失败置 failed(success=False,保留完整 exec_result) →
-          成功置 executed → 用 detect.probe_command 探测 + verify_recovered 判定 →
-          verified(success=True)/verification_failed(success=False)。
+    流程:
+      0. 清理类场景记录执行前磁盘基线(供"较基线下降"验证语义);
+      1. 经 exec_action 执行写命令(支持脚本 stdin 注入),失败置 failed;
+      2. 用 detect.probe_command 探测 + verify_recovered 判定 →
+         verified(success=True)/verification_failed(success=False)。
     返回更新后的 record(在打开的 session 内读回)。
     """
     action_id = record.id
     server_id = record.server_id
     scene = record.scene
 
-    # ---- 1. 执行写命令 ----
-    exec_result = actions.exec_ssh(server_id, command)
+    # ---- 0. 清理类场景: 记录执行前磁盘基线 ----
+    baseline_pct = None
+    if scene in CLEANUP_SCENES:
+        probe_cmd = detect.probe_command(scene, target)
+        probe = actions.exec_ssh(server_id, probe_cmd)
+        if probe.get("success"):
+            baseline_pct = detect.parse_df_usage(probe.get("stdout", ""), target.get("mount", ""))
+
+    # ---- 1. 执行写命令(经 exec_action 支持脚本注入) ----
+    exec_result = actions.exec_action(server_id, record.action_name, command, target)
     if not exec_result["success"]:
         with db.session_scope() as s:
             row = s.get(SelfHealAction, action_id)
@@ -203,7 +228,7 @@ def execute_and_verify(record, target, command, approver=None):
     verify_cmd = detect.probe_command(scene, target)
     verify = actions.exec_ssh(server_id, verify_cmd)
     recovered = bool(verify.get("success")) and verify_recovered(
-        scene, target, verify.get("stdout", ""))
+        scene, target, verify.get("stdout", ""), baseline_pct)
 
     with db.session_scope() as s:
         row = s.get(SelfHealAction, action_id)

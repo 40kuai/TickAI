@@ -17,6 +17,9 @@ def probe_command(scene: str, target: Dict[str, Any]) -> str:
     if scene == "disk_clean":
         mount = target["mount"]
         return f"df -Th {mount}"
+    if scene in ("log_cleanup_script", "ai_log_cleanup"):
+        mount = target.get("mount") or "/"
+        return f"df -Th {mount}"
     if scene == "cache_clean":
         return "cat /proc/meminfo"
     raise ValueError(f"unknown scene: {scene}")
