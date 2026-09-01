@@ -58,6 +58,49 @@ class SelfHealActionModelTests(unittest.TestCase):
             self.assertEqual(row.status, "pending")
             self.assertIsNone(row.approver)
 
+    def test_default_values(self):
+        """未显式传 status/triggered_by 时使用模型默认值。"""
+        with db.session_scope() as s:
+            sv = s.query(models.Server).first()
+            act = models.SelfHealAction(
+                server_id=sv.id, scene="disk_clean", target="/",
+                severity="low", action_name="truncate_log",
+                rendered_command="truncate -s 0 /var/log/x.log",
+            )
+            s.add(act)
+            s.flush()
+            aid = act.id
+        with db.session_scope() as s:
+            row = s.get(models.SelfHealAction, aid)
+            self.assertEqual(row.status, "pending")       # default
+            self.assertEqual(row.triggered_by, "user")    # default
+            self.assertIsNotNone(row.created_at)
+
+    def test_to_dict_includes_server_name(self):
+        with db.session_scope() as s:
+            sv = s.query(models.Server).first()
+            act = models.SelfHealAction(
+                server_id=sv.id, scene="disk_clean", target="/",
+                severity="low", action_name="truncate_log",
+                rendered_command="truncate -s 0 /var/log/x.log",
+            )
+            s.add(act)
+            s.flush()
+            aid = act.id
+            d = act.to_dict()  # open session 内 lazy load server relationship
+            self.assertEqual(d["server_id"], sv.id)
+            self.assertEqual(d["server_name"], "s")
+            self.assertEqual(d["scene"], "disk_clean")
+            self.assertEqual(d["severity"], "low")
+            self.assertEqual(d["status"], "pending")
+            self.assertIsNone(d["success"])
+            self.assertEqual(d["rendered_command"], "truncate -s 0 /var/log/x.log")
+            self.assertIn("id", d)
+            # 时间字段为 isoformat 字符串或 None
+            self.assertIsInstance(d["created_at"], str)
+            self.assertIsNone(d["approved_at"])
+            self.assertIsNone(d["executed_at"])
+
 
 if __name__ == "__main__":
     unittest.main()
