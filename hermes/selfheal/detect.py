@@ -65,7 +65,8 @@ def parse_meminfo(meminfo_output: str) -> Dict[str, Any]:
         if ":" not in line:
             continue
         key, _, val = line.partition(":")
-        num = _safe_int(val.split()[0])
+        parts = val.split()
+        num = _safe_int(parts[0]) if parts else 0
         if key == "MemTotal":
             total = num
         elif key == "Buffers":
