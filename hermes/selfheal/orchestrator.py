@@ -39,7 +39,7 @@ REQUIRED_TARGET_KEYS = {
 def _probe_metric(scene: str, target: Dict[str, Any], out: str) -> Any:
     if scene == "disk_clean":
         return detect.parse_df_usage(out, target.get("mount", ""))
-    if scene in ("log_cleanup_script", "ai_log_cleanup"):
+    if scene in CLEANUP_SCENES:
         return detect.parse_df_usage(out, target.get("mount", ""))
     if scene == "cache_clean":
         return detect.parse_meminfo(out).get("pct")
@@ -121,7 +121,7 @@ def _run(
         scene == "process_restart"
         and not detect.parse_systemctl_active(probe["stdout"])
     ) or (
-        scene in ("disk_clean", "log_cleanup_script", "ai_log_cleanup")
+        (scene == "disk_clean" or scene in CLEANUP_SCENES)
         and metric is not None and metric >= config.DISK_LOW_PCT
     ) or (
         scene == "cache_clean" and metric is not None

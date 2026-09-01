@@ -223,6 +223,25 @@ class CleanupSceneTests(_SelfHealTestCase):
         self.assertEqual(result["severity"], "high")
         self.assertEqual(result["status"], "pending")
         self.assertFalse(result["success"])
+        # DB 断言：pending 记录已落库，分级理由含"人工审批"
+        with db.session_scope() as s:
+            row = s.query(models.SelfHealAction).filter_by(status="pending").first()
+            self.assertIsNotNone(row)
+            self.assertIsNotNone(row.grade_reasons)
+            self.assertIn("人工审批", row.grade_reasons)
+
+    def test_verify_recovered_no_baseline_degrades_to_abs(self):
+        # 无基线时退化为绝对阈值: <DISK_LOW_PCT 恢复, ≥DISK_LOW_PCT 未恢复
+        ok = orchestrator.verify_recovered(
+            "ai_log_cleanup", {"mount": "/"},
+            "Filesystem Type Size Used Avail Use% Mounted on\n"
+            "/dev/vda1 ext4 50G 35G 15G 70% /\n")
+        self.assertTrue(ok)
+        bad = orchestrator.verify_recovered(
+            "ai_log_cleanup", {"mount": "/"},
+            "Filesystem Type Size Used Avail Use% Mounted on\n"
+            "/dev/vda1 ext4 50G 42G 8G 85% /\n")
+        self.assertFalse(bad)
 
     def test_verify_recovered_disk_dropped(self):
         # ai_log_cleanup: 基线 92% → 执行后 70% (下降) → recovered
