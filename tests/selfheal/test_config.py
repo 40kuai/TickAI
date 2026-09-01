@@ -6,6 +6,31 @@ from unittest.mock import patch
 from hermes.selfheal import config
 
 
+class LogCleanupConfigTests(unittest.TestCase):
+    def setUp(self):
+        os.environ["SELFHEAL_LOG_CLEANUP_CATEGORIES_WHITELIST"] = "system,service,docker-log,docker-prune"
+        config.reload_config()
+
+    def test_default_categories_empty(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("SELFHEAL_LOG_CLEANUP_CATEGORIES_WHITELIST", None)
+            config.reload_config()
+            self.assertEqual(config.LOG_CLEANUP_CATEGORIES, [])
+
+    def test_categories_env(self):
+        self.assertEqual(config.LOG_CLEANUP_CATEGORIES,
+                         ["system", "service", "docker-log", "docker-prune"])
+
+    def test_cleanup_sizes(self):
+        self.assertEqual(config.JOURNAL_VACUUM_SIZE_MB, 200)
+        self.assertEqual(config.SERVICE_LOG_MAX_MB, 100)
+        self.assertEqual(config.SERVICE_LOG_MAX_DAYS, 7)
+        self.assertEqual(config.DOCKER_LOG_MAX_MB, 50)
+
+    def test_docker_log_prefix(self):
+        self.assertTrue(config.DOCKER_LOG_TRUNCATE_PREFIX.startswith("/var/lib/docker/containers/"))
+
+
 class ConfigTests(unittest.TestCase):
     def test_default_thresholds(self):
         self.assertEqual(config.DISK_LOW_PCT, 80)

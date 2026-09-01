@@ -49,11 +49,25 @@ PEAK_HOURS: List[Tuple[int, int]] = _parse_hours(
     settings.get("SELFHEAL_PEAK_HOURS", "9-18")
 )
 
+# 日志清理固定脚本类别白名单（通道一；默认空=安全兜底）
+LOG_CLEANUP_CATEGORIES: List[str] = _split_csv("SELFHEAL_LOG_CLEANUP_CATEGORIES_WHITELIST")
+
+# 清理脚本内部阈值（MB/天）
+JOURNAL_VACUUM_SIZE_MB = 200
+SERVICE_LOG_MAX_MB = 100
+SERVICE_LOG_MAX_DAYS = 7
+DOCKER_LOG_MAX_MB = 50
+
+# AI 清理中 docker 日志路径前缀（代码常量，不 env 化）
+DOCKER_LOG_TRUNCATE_PREFIX = "/var/lib/docker/containers/"
+
 
 def reload_config() -> None:
     """重新读取配置（环境变量 > .env > 默认，供测试/运行时配置变更）。"""
     global SERVICE_WHITELIST, LOG_PATH_WHITELIST, DROPCACHES_MODES_WHITELIST, PEAK_HOURS
+    global LOG_CLEANUP_CATEGORIES
     SERVICE_WHITELIST = _split_csv("SELFHEAL_SERVICE_WHITELIST")
     LOG_PATH_WHITELIST = _split_csv("SELFHEAL_LOG_PATH_WHITELIST")
     DROPCACHES_MODES_WHITELIST = _split_csv("SELFHEAL_DROPCACHES_MODES_WHITELIST")
     PEAK_HOURS = _parse_hours(settings.get("SELFHEAL_PEAK_HOURS", "9-18"))
+    LOG_CLEANUP_CATEGORIES = _split_csv("SELFHEAL_LOG_CLEANUP_CATEGORIES_WHITELIST")
