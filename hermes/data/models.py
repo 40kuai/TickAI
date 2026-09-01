@@ -298,3 +298,62 @@ class SyncConfig(Base):
             "field_mapping": mapping,
             "enabled": self.enabled,
         }
+
+
+class SelfHealAction(Base):
+    """一次自愈动作：探测→分级→执行/审批→验证 的完整审计。
+
+    状态机:
+      pending → approved → executed → verified            (低危直接 executing→executed)
+              ↘ rejected
+      pending → approved → executed → verification_failed (验证未通过)
+      任意执行阶段失败 → failed
+    success = (执行成功 && 验证通过) 双条件。
+    """
+    __tablename__ = "selfheal_actions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    server_id: Mapped[int] = mapped_column(ForeignKey("servers.id"))
+    scene: Mapped[str] = mapped_column(String(32))       # process_restart / disk_clean / cache_clean
+    target: Mapped[str] = mapped_column(String(255))     # 服务名 / 挂载点 / drop_caches 模式
+    severity: Mapped[str] = mapped_column(String(8))     # low / high
+    action_name: Mapped[str] = mapped_column(String(64)) # 模板标识
+    rendered_command: Mapped[str] = mapped_column(Text)  # 渲染后精确命令(审计留痕)
+    status: Mapped[str] = mapped_column(String(24), default="pending")
+    # pending / approved / rejected / executing / executed / failed / verified / verification_failed
+    triggered_by: Mapped[str] = mapped_column(String(24), default="user")  # user / dialog
+    approver: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    executed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    execution_result: Mapped[Optional[str]] = mapped_column(Text, nullable=True)    # JSON
+    verification_result: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON
+    success: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    server: Mapped["Server"] = relationship()
+
+    __table_args__ = (
+        Index("ix_selfheal_actions_status", "status"),
+        Index("ix_selfheal_actions_server_id", "server_id"),
+    )
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "server_id": self.server_id,
+            "server_name": self.server.name if self.server else None,
+            "scene": self.scene,
+            "target": self.target,
+            "severity": self.severity,
+            "action_name": self.action_name,
+            "rendered_command": self.rendered_command,
+            "status": self.status,
+            "triggered_by": self.triggered_by,
+            "approver": self.approver,
+            "approved_at": self.approved_at.isoformat() if self.approved_at else None,
+            "executed_at": self.executed_at.isoformat() if self.executed_at else None,
+            "execution_result": self.execution_result,
+            "verification_result": self.verification_result,
+            "success": self.success,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
