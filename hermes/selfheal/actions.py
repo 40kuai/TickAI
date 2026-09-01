@@ -100,9 +100,12 @@ def exec_ssh(server_id: int, command: str, timeout: int = 10) -> Dict[str, Any]:
     """
     try:
         host, cred_args, server_name = get_server_ssh_args(server_id)
+        port = int(cred_args.get("port", 22))
+        if not (1 <= port <= 65535):
+            return {"success": False, "error": f"invalid SSH port: {port}"}
         return _connect_exec(
             host=host,
-            port=int(cred_args.get("port", 22)),
+            port=port,
             username=cred_args["username"],
             password=cred_args.get("password", ""),
             key_content=cred_args.get("key_content", ""),

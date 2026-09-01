@@ -65,6 +65,49 @@ class ExecSshTests(unittest.TestCase):
         self.assertFalse(r["success"])
         self.assertIn("error", r)
 
+    def test_ssh_invalid_port(self):
+        # DB 脏数据端口越界 → 返回结构化失败而不是依赖异常收敛
+        with patch("hermes.selfheal.actions.get_server_ssh_args",
+                   return_value=("10.0.0.1", {"port": 99999, "username": "root",
+                                              "password": "x"}, "web-01")), \
+             patch("hermes.selfheal.actions._connect_exec") as m:
+            r = actions.exec_ssh(1, "systemctl is-active nginx")
+        self.assertFalse(r["success"])
+        self.assertIn("invalid SSH port", r["error"])
+        m.assert_not_called()
+
+    def test_connect_exec_invalid_key(self):
+        # 密钥内容非法 → 返回 {success: False, error}
+        r = actions._connect_exec("10.0.0.1", 22, "root", "", "not-a-valid-key",
+                                  "systemctl is-active nginx")
+        self.assertFalse(r["success"])
+        self.assertIn("error", r)
+
+    def test_connect_exec_connection_error(self):
+        # 连接异常 → 收敛为结构化失败
+        with patch("paramiko.SSHClient") as m:
+            m.return_value.connect.side_effect = Exception("connection refused")
+            r = actions._connect_exec("10.0.0.1", 22, "root", "x", "",
+                                      "systemctl is-active nginx")
+        self.assertFalse(r["success"])
+        self.assertIn("error", r)
+
+    def test_connect_exec_success(self):
+        # 命令成功 → 返回 stdout/exit_code
+        fake_stdout = unittest.mock.MagicMock()
+        fake_stdout.read.return_value = b"active"
+        fake_stdout.channel.recv_exit_status.return_value = 0
+        fake_stderr = unittest.mock.MagicMock()
+        fake_stderr.read.return_value = b""
+        with patch("paramiko.SSHClient") as m:
+            client = m.return_value
+            client.exec_command.return_value = (None, fake_stdout, fake_stderr)
+            r = actions._connect_exec("10.0.0.1", 22, "root", "x", "",
+                                      "systemctl is-active nginx")
+        self.assertTrue(r["success"])
+        self.assertEqual(r["stdout"], "active")
+        self.assertEqual(r["exit_code"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()
