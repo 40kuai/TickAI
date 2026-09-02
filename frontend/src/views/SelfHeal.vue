@@ -23,6 +23,7 @@ const runResult = ref(null)
 // ====== 审批状态 ======
 const approvingId = ref(null)
 const actionError = ref('')
+const detailItem = ref(null) // 查看详情弹窗当前项
 
 // ====== 标签 / 徽章映射 ======
 const SCENE_LABELS = {
@@ -221,6 +222,33 @@ async function handleReject(item) {
   } finally {
     approvingId.value = null
     await refreshActionsAndStats()
+  }
+}
+
+// ====== 审批详情弹窗 ======
+function openDetail(item) {
+  detailItem.value = item
+}
+function closeDetail() {
+  detailItem.value = null
+}
+// 美化 JSON: 已解析对象格式化输出, 其余原样
+function fmtJson(v) {
+  if (v === null || v === undefined || v === '') return '-'
+  try {
+    const obj = typeof v === 'string' ? JSON.parse(v) : v
+    return JSON.stringify(obj, null, 2)
+  } catch {
+    return String(v)
+  }
+}
+// 目标参数: 兼容已 JSON 字符串化字段
+function fmtTarget(v) {
+  try {
+    const obj = JSON.parse(v || '{}')
+    return Object.keys(obj).length ? JSON.stringify(obj, null, 2) : '-'
+  } catch {
+    return v || '-'
   }
 }
 
@@ -501,27 +529,106 @@ onMounted(loadAll)
                 <span class="badge" :class="statusBadge(a.status)">{{ statusLabel(a.status) }}</span>
               </td>
               <td>
-                <div v-if="a.status === 'pending'" class="action-btns">
+                <div class="action-btns">
                   <button
-                    class="btn btn-primary btn-sm"
+                    class="btn btn-secondary btn-sm"
                     :disabled="approvingId !== null"
-                    @click="handleApprove(a)"
+                    @click="openDetail(a)"
                   >
-                    {{ approvingId === a.id ? '处理中…' : '批准' }}
+                    详情
                   </button>
-                  <button
-                    class="btn btn-danger btn-sm"
-                    :disabled="approvingId !== null"
-                    @click="handleReject(a)"
-                  >
-                    拒绝
-                  </button>
+                  <template v-if="a.status === 'pending'">
+                    <button
+                      class="btn btn-primary btn-sm"
+                      :disabled="approvingId !== null"
+                      @click="handleApprove(a)"
+                    >
+                      {{ approvingId === a.id ? '处理中…' : '批准' }}
+                    </button>
+                    <button
+                      class="btn btn-danger btn-sm"
+                      :disabled="approvingId !== null"
+                      @click="handleReject(a)"
+                    >
+                      拒绝
+                    </button>
+                  </template>
                 </div>
-                <span v-else class="text-light">-</span>
               </td>
             </tr>
           </tbody>
         </table>
+      </div>
+    </div>
+
+    <!-- 审批详情弹窗 -->
+    <div v-if="detailItem" class="modal-mask" @click.self="closeDetail">
+      <div class="modal-panel">
+        <div class="modal-head">
+          <h3>自愈动作详情 #{{ detailItem.id }}</h3>
+          <button class="btn btn-secondary btn-sm" @click="closeDetail">关闭</button>
+        </div>
+        <div class="modal-body">
+          <div class="detail-grid">
+            <div class="detail-field">
+              <span class="detail-label">服务器</span>
+              <span class="detail-value">{{ detailItem.server_name || detailItem.server_id || '-' }}</span>
+            </div>
+            <div class="detail-field">
+              <span class="detail-label">场景</span>
+              <span class="detail-value">{{ sceneLabel(detailItem.scene) }}（{{ detailItem.action_name }}）</span>
+            </div>
+            <div class="detail-field">
+              <span class="detail-label">风险 / 状态</span>
+              <span class="detail-value">
+                <span class="badge" :class="severityBadge(detailItem.severity)">{{ severityLabel(detailItem.severity) }}</span>
+                <span class="badge" :class="statusBadge(detailItem.status)">{{ statusLabel(detailItem.status) }}</span>
+              </span>
+            </div>
+            <div class="detail-field">
+              <span class="detail-label">触发方式</span>
+              <span class="detail-value">{{ detailItem.triggered_by === 'dialog' ? 'AI 对话' : '手动' }}</span>
+            </div>
+            <div class="detail-field">
+              <span class="detail-label">创建时间</span>
+              <span class="detail-value">{{ detailItem.created_at || '-' }}</span>
+            </div>
+            <div class="detail-field">
+              <span class="detail-label">审批人 / 批准时间</span>
+              <span class="detail-value">{{ detailItem.approver || '-' }} / {{ detailItem.approved_at || '-' }}</span>
+            </div>
+          </div>
+
+          <div class="detail-block">
+            <span class="detail-label">目标参数</span>
+            <pre class="detail-pre">{{ fmtTarget(detailItem.target) }}</pre>
+          </div>
+
+          <div class="detail-block">
+            <span class="detail-label">执行命令</span>
+            <pre class="detail-pre">{{ detailItem.rendered_command || '-' }}</pre>
+          </div>
+
+          <div class="detail-block">
+            <span class="detail-label">分级理由</span>
+            <pre class="detail-pre">{{ fmtJson(detailItem.grade_reasons) }}</pre>
+          </div>
+
+          <div class="detail-block">
+            <span class="detail-label">执行结果（{{ detailItem.executed_at || '未执行' }}）</span>
+            <pre class="detail-pre">{{ fmtJson(detailItem.execution_result) }}</pre>
+          </div>
+
+          <div class="detail-block">
+            <span class="detail-label">验证结果（success={{ detailItem.success }}）</span>
+            <pre class="detail-pre">{{ fmtJson(detailItem.verification_result) }}</pre>
+          </div>
+
+          <div v-if="detailItem.plan_id" class="detail-block">
+            <span class="detail-label">AI 策略批次</span>
+            <pre class="detail-pre">{{ detailItem.plan_id }}</pre>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -596,6 +703,77 @@ onMounted(loadAll)
 .text-light {
   color: var(--color-text-secondary);
   font-size: 13px;
+}
+
+/* 审批详情弹窗 */
+.modal-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 24px;
+}
+.modal-panel {
+  background: var(--color-card);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  width: min(720px, 100%);
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+}
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--color-border-light);
+}
+.modal-head h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+.modal-body {
+  padding: 16px 20px;
+  overflow-y: auto;
+}
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px 20px;
+  margin-bottom: 14px;
+}
+.detail-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.detail-label {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.detail-value {
+  font-size: 13px;
+  word-break: break-all;
+}
+.detail-block {
+  margin-bottom: 14px;
+}
+.detail-pre {
+  margin: 4px 0 0;
+  padding: 10px 12px;
+  background: var(--color-border-light);
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 220px;
+  overflow-y: auto;
 }
 
 /* 统计卡片（与 Dashboard 风格一致） */
