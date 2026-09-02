@@ -22,18 +22,29 @@ def load_cleanup_script() -> str:
     return _CLEANUP_SCRIPT.read_text(encoding="utf-8")
 
 
-def build_cleanup_command(category: str) -> str:
+def _normalize_category(category: str | None) -> str:
+    """category 缺省/为空 → 'all'(脚本内置聚合); 其余原样。"""
+    return (category or "").strip() or "all"
+
+
+def build_cleanup_command(category: str | None) -> str:
     """构建 ssh 命令: <阈值env> bash -s -- <category>。
 
-    类别必须白名单内且仅含 [a-z0-9-](校验失败抛 ValueError)。
+    类别缺省/为空 → 'all'(跑全部4类); 'all' 仅在白名单非空时放行(安全兜底);
+    其他类别必须白名单内且仅含 [a-z0-9-](校验失败抛 ValueError)。
     阈值以 env 前缀下发, 保证远端脚本与 config 单一来源一致。
     """
-    if category not in config.LOG_CLEANUP_CATEGORIES:
-        raise ValueError(
-            f"category {category!r} 不在白名单: {config.LOG_CLEANUP_CATEGORIES}"
-        )
-    if not _CATEGORY_RE.fullmatch(category):
-        raise ValueError(f"category {category!r} 含非法字符(仅允许 [a-z0-9-])")
+    category = _normalize_category(category)
+    if category == "all":
+        if not config.LOG_CLEANUP_CATEGORIES:
+            raise ValueError("清理类别白名单为空, 禁止 all 全量清理")
+    else:
+        if category not in config.LOG_CLEANUP_CATEGORIES:
+            raise ValueError(
+                f"category {category!r} 不在白名单: {config.LOG_CLEANUP_CATEGORIES}"
+            )
+        if not _CATEGORY_RE.fullmatch(category):
+            raise ValueError(f"category {category!r} 含非法字符(仅允许 [a-z0-9-])")
     env_prefix = (
         f"JOURNAL_VACUUM_SIZE_MB={config.JOURNAL_VACUUM_SIZE_MB} "
         f"SERVICE_LOG_MAX_MB={config.SERVICE_LOG_MAX_MB} "

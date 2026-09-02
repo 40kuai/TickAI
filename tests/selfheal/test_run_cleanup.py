@@ -30,9 +30,21 @@ class RunCleanupTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             run_cleanup.build_cleanup_command("rm -rf /")
 
-    def test_build_command_rejects_not_whitelisted(self):
+    def test_build_command_defaults_to_all(self):
+        # category 缺省/为空 → 默认 all(白名单非空时放行, 脚本内置聚合)
+        cmd = run_cleanup.build_cleanup_command("")
+        self.assertIn("bash -s -- all", cmd)
+        cmd2 = run_cleanup.build_cleanup_command(None)
+        self.assertIn("bash -s -- all", cmd2)
+
+    def test_build_command_all_rejected_when_whitelist_empty(self):
+        # 安全兜底: 白名单为空时连 all 也拒绝
+        os.environ["SELFHEAL_LOG_CLEANUP_CATEGORIES_WHITELIST"] = ""
+        config.reload_config()
         with self.assertRaises(ValueError):
-            run_cleanup.build_cleanup_command("all")  # all 不在白名单
+            run_cleanup.build_cleanup_command("")
+        with self.assertRaises(ValueError):
+            run_cleanup.build_cleanup_command("all")
 
     def test_build_command_rejects_invalid_chars(self):
         # 白名单内但含非法字符(空格/分号) → 字符集校验拦截

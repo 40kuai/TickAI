@@ -230,6 +230,22 @@ class CleanupSceneTests(_SelfHealTestCase):
             self.assertIsNotNone(row.grade_reasons)
             self.assertIn("人工审批", row.grade_reasons)
 
+    def test_log_cleanup_script_without_category_pending(self):
+        # category 已非必填: 仅传 mount 即可触发 → 落审批单(默认 all)
+        with _mock_exec([
+                {"success": True, "exit_code": 0,
+                 "stdout": "Filesystem Type Size Used Avail Use% Mounted on\n"
+                           "/dev/vda1 ext4 50G 42G 8G 85% /\n", "stderr": ""},
+        ]):
+            result = orchestrator.run_selfheal(
+                1, "log_cleanup_script", {"mount": "/"}, "user")
+        self.assertEqual(result["severity"], "high")
+        self.assertEqual(result["status"], "pending")
+        with db.session_scope() as s:
+            row = s.query(models.SelfHealAction).filter_by(status="pending").first()
+            self.assertIsNotNone(row)
+            # 审批时以空 category 渲染 → 默认 all(rendered_command 为 None, 审批时才渲染)
+
     def test_verify_recovered_no_baseline_degrades_to_abs(self):
         # 无基线时退化为绝对阈值: <DISK_LOW_PCT 恢复, ≥DISK_LOW_PCT 未恢复
         ok = orchestrator.verify_recovered(

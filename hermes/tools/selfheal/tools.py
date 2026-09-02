@@ -23,7 +23,8 @@ def _selfheal_schema() -> Dict[str, Any]:
         "description": (
             "触发一次受控自愈闭环: 探测 → 分级 → 低危自主执行/高危落审批单 → 验证恢复。"
             "写命令只来自模板白名单。"
-            "场景: process_restart(重启服务)、disk_clean(磁盘清理)、cache_clean(缓存清理)。"
+            "场景: process_restart(重启服务)、disk_clean(磁盘清理)、cache_clean(缓存清理)、"
+            "log_cleanup_script(日志清理, 写操作, 恒落审批单, 缺省跑全部4类)。"
             "高危场景不会直接执行写命令, 而是生成审批单等待人工批准。"
         ),
         "parameters": {
@@ -39,7 +40,8 @@ def _selfheal_schema() -> Dict[str, Any]:
                     "description": (
                         "自愈场景。process_restart: 重启指定服务; "
                         "disk_clean: 清理磁盘(需 mount+path); "
-                        "cache_clean: 清理缓存(需 mode)。"
+                        "cache_clean: 清理缓存(需 mode); "
+                        "log_cleanup_script: 固定脚本清理日志(需 mount, category 可选缺省全部)。"
                     ),
                 },
                 "target": {
@@ -47,7 +49,9 @@ def _selfheal_schema() -> Dict[str, Any]:
                     "description": (
                         "场景目标参数。process_restart 需 service(服务名); "
                         "disk_clean 需 mount(挂载点)+path(日志文件路径, 必须在白名单内); "
-                        "cache_clean 需 mode(清理模式)。"
+                        "cache_clean 需 mode(清理模式); "
+                        "log_cleanup_script 需 mount(挂载点), category 可选"
+                        "(system/service/docker-log/docker-prune, 缺省全部4类)。"
                     ),
                 },
             },

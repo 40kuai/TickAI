@@ -19,6 +19,14 @@ def _in_whitelist(value: str, whitelist) -> bool:
     return value in whitelist
 
 
+def _cleanup_category_valid(value: str | None) -> bool:
+    """run_cleanup_script 类别校验: 空/缺省 → all(白名单非空即放行), 其余须白名单内。"""
+    value = (value or "").strip()
+    if value == "" or value == "all":
+        return bool(config.LOG_CLEANUP_CATEGORIES)
+    return _in_whitelist(value, config.LOG_CLEANUP_CATEGORIES)
+
+
 # docker 容器日志路径: <prefix><container_id>/<container_id>-json.log
 # 全匹配(拒绝空白/分号/管道等 shell 元字符), 防止前缀校验被注入绕过。
 _DOCKER_LOG_PATH_RE = re.compile(
@@ -52,8 +60,8 @@ ACTIONS: Dict[str, Dict[str, Any]] = {
     "run_cleanup_script": {
         "scene": "log_cleanup_script",
         "template": "bash -s -- {category}",
-        "validate": lambda p: _in_whitelist(p.get("category", ""), config.LOG_CLEANUP_CATEGORIES),
-        "why": "清理类别必须在 SELFHEAL_LOG_CLEANUP_CATEGORIES_WHITELIST 内",
+        "validate": lambda p: _cleanup_category_valid(p.get("category", "")),
+        "why": "清理类别必须 SELFHEAL_LOG_CLEANUP_CATEGORIES_WHITELIST 内(缺省=全部, 白名单非空)",
         "executor": "cleanup_script",
     },
     "journal_vacuum": {
@@ -84,7 +92,7 @@ def render_command(action_name: str, params: Dict[str, Any]) -> str:
         # 脚本类动作: 复用 build_cleanup_command 完整结果(含 env 阈值前缀),
         # 保证审计命令与实际执行命令一致, 阈值经 env 下发远端脚本。
         from .run_cleanup import build_cleanup_command
-        return build_cleanup_command(params["category"])
+        return build_cleanup_command(params.get("category", ""))
     return action["template"].format(**params)
 
 

@@ -44,6 +44,13 @@ class SchemaTests(unittest.TestCase):
         )
         self.assertEqual(props["target"]["type"], "object")
 
+    def test_schema_describes_log_cleanup_script(self):
+        # 对话 LLM 需知道 log_cleanup_script 场景且 category 可选(缺省全部)
+        schema = registry.get("run_selfheal")["schema"]
+        desc = schema["description"] + "\n" + schema["parameters"]["properties"]["scene"]["description"]
+        self.assertIn("log_cleanup_script", desc)
+        self.assertIn("category", schema["parameters"]["properties"]["target"]["description"])
+
 
 class HandlerValidationTests(unittest.TestCase):
     def test_missing_server_id_returns_error(self):

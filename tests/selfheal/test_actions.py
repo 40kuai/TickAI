@@ -127,6 +127,13 @@ class CleanupActionTests(unittest.TestCase):
         self.assertIn("JOURNAL_VACUUM_SIZE_MB=", cmd)
         self.assertTrue(cmd.endswith("bash -s -- system"))
 
+    def test_run_cleanup_script_defaults_all(self):
+        # category 缺省/为空 → 默认 all
+        cmd = actions.render_command("run_cleanup_script", {})
+        self.assertTrue(cmd.endswith("bash -s -- all"))
+        cmd2 = actions.render_command("run_cleanup_script", {"category": ""})
+        self.assertTrue(cmd2.endswith("bash -s -- all"))
+
     def test_run_cleanup_script_rejects_bad(self):
         with self.assertRaises(ValueError):
             actions.render_command("run_cleanup_script", {"category": "rm -rf"})

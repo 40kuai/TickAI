@@ -3,6 +3,7 @@ import os
 import unittest
 from unittest.mock import patch
 
+from hermes.config import settings
 from hermes.selfheal import config
 
 
@@ -12,10 +13,13 @@ class LogCleanupConfigTests(unittest.TestCase):
         config.reload_config()
 
     def test_default_categories_empty(self):
+        # 隔离 .env 文件影响(settings 优先级: 环境变量 > .env > 默认),
+        # 模拟"无任何配置"的纯默认态 → 白名单空=安全兜底。
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("SELFHEAL_LOG_CLEANUP_CATEGORIES_WHITELIST", None)
-            config.reload_config()
-            self.assertEqual(config.LOG_CLEANUP_CATEGORIES, [])
+            with patch.object(settings, "_file_env", {}):
+                config.reload_config()
+                self.assertEqual(config.LOG_CLEANUP_CATEGORIES, [])
 
     def test_categories_env(self):
         self.assertEqual(config.LOG_CLEANUP_CATEGORIES,

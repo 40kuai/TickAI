@@ -32,7 +32,7 @@ REQUIRED_TARGET_KEYS = {
     "process_restart": ("service",),
     "disk_clean": ("mount", "path"),
     "cache_clean": ("mode",),
-    "log_cleanup_script": ("category", "mount"),
+    "log_cleanup_script": ("mount",),  # category 可选, 缺省跑全部(见 run_cleanup.build_cleanup_command)
 }
 
 
