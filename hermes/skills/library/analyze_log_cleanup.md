@@ -19,7 +19,7 @@ severity: warning
 | `truncate_file` | 截断白名单内日志文件 | path（必须在日志路径白名单内） |
 | `journal_vacuum` | 压缩 journald | size（1-10000 的数字，MB） |
 | `docker_log_truncate` | 截断 docker 容器 json.log | path（必须以 /var/lib/docker/containers/ 开头） |
-| `run_cleanup_category` | 跑固定清理脚本类别 | category（system/service/docker-log/docker-prune） |
+| `run_cleanup_category` | 跑固定清理脚本类别 | category（可选；缺省跑全部 4 类 system/service/docker-log/docker-prune） |
 
 ## 输出格式
 
