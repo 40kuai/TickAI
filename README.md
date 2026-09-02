@@ -14,6 +14,7 @@
 | ☸️ **Kubernetes 集成** | 节点、Pod、Deployment、Service 检查，事件分析 |
 | 🔍 **LDAP 查询** | 用户信息查询（支持 username/email/uid） |
 | 💬 **AI 对话引擎** | 自然语言提问，自动调用工具回答 |
+| 🛡️ **智能自愈** | 3 类闭环自愈（进程重启/磁盘清理/缓存清理）+ 日志清理双通道（固定脚本 + AI 分析），所有写操作统一人工审批 |
 | 📊 **审计日志** | 完整的操作记录和运行统计 |
 | 🔒 **安全认证** | JWT + HttpOnly Cookie，bcrypt 密码哈希 |
 
@@ -30,10 +31,11 @@ TickAI/
 │   ├── server_routes.py       # 服务器管理 API
 │   ├── chat_routes.py         # LLM 对话 API
 │   ├── tool_routes.py         # 工具浏览/执行 API
-│   └── history_routes.py      # 历史记录 API
+│   ├── history_routes.py      # 历史记录 API
+│   └── selfheal_routes.py     # 智能自愈 API（触发/审批/扫描/统计）
 ├── frontend/                   # Vue 3 前端
 │   └── src/
-│       ├── views/             # 6 个页面
+│       ├── views/             # 8 个页面
 │       ├── stores/            # Pinia 状态管理
 │       ├── router/            # Vue Router + 路由守卫
 │       ├── api/               # Axios 实例
@@ -45,8 +47,10 @@ TickAI/
 │   ├── core/                  # LLM 客户端 + 工具调用
 │   ├── data/                  # 数据层 (SQLAlchemy)
 │   ├── i18n/                  # 国际化
-│   ├── skills/                # 技能库
-│   └── tools/                 # 工具注册表（SSH/K8s/LDAP）
+│   ├── skills/                # 技能库（含 analyze_log_cleanup 日志清理分析）
+│   ├── selfheal/              # 自愈编排（检测/分级/执行/验证 + 日志清理脚本）
+│   └── tools/                 # 工具注册表（SSH/K8s/LDAP/SelfHeal）
+├── alembic/                    # 数据库迁移
 ├── data/                       # 运行时数据（SQLite DB）
 ├── Dockerfile                  # 多阶段构建（Node + Python）
 ├── docker-compose.yml          # 容器编排
@@ -157,6 +161,12 @@ docker compose down
 - 查看所有已注册工具及参数 Schema
 - 在线测试执行
 
+### 6. 🛡️ 智能自愈
+- 手动触发 3 类自愈场景：进程重启、磁盘清理、缓存清理
+- **日志清理**：触发固定脚本清理（系统日志/服务日志/Docker 日志/容器镜像）、只读扫描、提交 AI 分析策略
+- **审批队列**：高危动作人工审批/拒绝，详情弹窗可查看目标参数、执行命令、执行与验证结果
+- 成功统计：执行总数、成功率、最近记录
+
 ---
 
 ## 🔧 内置工具库
@@ -185,6 +195,12 @@ docker compose down
 |------|------|
 | `ldap_search_user` | 用户信息查询 |
 
+### SelfHeal 工具
+| 工具 | 功能 |
+|------|------|
+| `run_selfheal` | 触发自愈场景（process_restart/disk_clean/cache_clean/log_cleanup_script），高危落审批单 |
+| `scan_log_cleanup` | 只读扫描日志清理清单（磁盘/日志/Docker 容器/镜像） |
+
 ---
 
 ## 🔐 安全设计
@@ -193,7 +209,7 @@ docker compose down
 |------|------|
 | **认证** | JWT + HttpOnly Cookie，SameSite 防护 |
 | **密码** | bcrypt 哈希（自动迁移旧 SHA-256） |
-| **工具安全** | 所有工具严格只读 |
+| **工具安全** | 对话工具严格只读；自愈写操作仅经模板白名单渲染，统一走人工审批，LLM 永不直接执行 |
 | **操作审计** | 所有操作 100% 记录 |
 | **AI 身份** | System Prompt 注入，防止身份漂移 |
 | **默认凭据** | 无硬编码，首次启动随机生成或环境变量配置 |
