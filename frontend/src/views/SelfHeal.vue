@@ -286,6 +286,104 @@ const aiPlanError = ref('')
 const aiPlanResult = ref(null)
 const strategyJson = ref('')
 
+// ====== 日志清理向导: 勾选状态 + 策略生成 ======
+// 勾选状态: Map<selectionKey, {type, params, label, size_mb, risk}>
+// selectionKey 唯一标识可勾选项: file:<kind>:<path> | journal | prune
+const selected = ref(new Map())
+// journal 压缩大小(MB), 勾选后生效
+const journalSize = ref(200)
+// 清理向导提交状态
+const wizardRunning = ref(false)
+const wizardError = ref('')
+const wizardResult = ref(null)
+
+// 文件行: 附加 kind 标签(tab 归属), 供模板渲染与勾选
+function fileRows(list, kind) {
+  return (list || []).map((f) => ({ ...f, kind }))
+}
+const varLogRows = computed(() => fileRows(scanResult.value?.var_log, 'truncate_file'))
+const serviceLogRows = computed(() => fileRows(scanResult.value?.service_logs, 'truncate_file'))
+const dockerLogRows = computed(() => fileRows(scanResult.value?.docker_logs, 'docker_log_truncate'))
+
+// 清理方式标签文案
+const KIND_LABELS = {
+  truncate_file: '截断文件',
+  docker_log_truncate: '截断容器日志',
+}
+const KIND_RISKS = {
+  truncate_file: 'low',
+  docker_log_truncate: 'medium',
+}
+
+function selKey(row) {
+  return `file:${row.kind}:${row.path}`
+}
+
+function isSelected(key) {
+  return selected.value.has(key)
+}
+
+function toggleFile(row) {
+  const key = selKey(row)
+  if (selected.value.has(key)) {
+    selected.value.delete(key)
+  } else {
+    selected.value.set(key, {
+      type: row.kind,
+      params: { path: row.path },
+      label: row.path,
+      size_mb: row.size_mb,
+      risk: KIND_RISKS[row.kind] || 'low',
+    })
+  }
+  selected.value = new Map(selected.value) // 触发响应式
+}
+
+function toggleJournal() {
+  if (selected.value.has('journal')) {
+    selected.value.delete('journal')
+  } else {
+    selected.value.set('journal', {
+      type: 'journal_vacuum',
+      params: { size: journalSize.value },
+      label: 'journald 压缩',
+      risk: 'low',
+    })
+  }
+  selected.value = new Map(selected.value)
+}
+
+function togglePrune() {
+  if (selected.value.has('prune')) {
+    selected.value.delete('prune')
+  } else {
+    selected.value.set('prune', {
+      type: 'run_cleanup_category',
+      params: { category: 'docker-prune' },
+      label: 'Docker 残留回收(docker-prune)',
+      risk: 'high',
+    })
+  }
+  selected.value = new Map(selected.value)
+}
+
+function removeSelected(key) {
+  selected.value.delete(key)
+  selected.value = new Map(selected.value)
+}
+
+// 已选汇总数组(模板渲染)
+const selectedList = computed(() => Array.from(selected.value.entries()))
+
+// 策略 JSON 预览(实时生成, 只读)
+const wizardStrategy = computed(() => ({
+  mount: '/',
+  items: Array.from(selected.value.values()).map((s) => ({ type: s.type, ...s.params })),
+}))
+
+// 向导可提交条件: 已选服务器 且 至少勾选一项
+const canSubmitWizard = computed(() => Boolean(cleanupForm.server_id) && selected.value.size > 0)
+
 // 触发固定清理脚本(统一审批出口: auto 直执/approval 挂单/reject 拒绝)
 async function handleCleanup() {
   if (cleanupRunning.value) return
