@@ -429,11 +429,11 @@ const wizardSummary = computed(() => {
     rejected: r.rejected ?? 0,
   }
 })
-// 被拒项(携带 reason 的 items)
+// 被拒项(后端契约: {ok: False, reason})
 const wizardRejectedItems = computed(() => {
   const r = wizardResult.value || {}
   const items = Array.isArray(r.items) ? r.items : []
-  return items.filter((it) => it && it.reason)
+  return items.filter((it) => it && it.ok === false)
 })
 
 // 磁盘使用率: scanResult.disk 是多挂载点对象 {<mount>: {use_pct, used, avail}}
@@ -773,7 +773,7 @@ onMounted(loadAll)
             <div v-if="wizardRejectedItems.length" class="rejected-panel">
               <div class="selected-title">被拒项及原因</div>
               <div v-for="(it, i) in wizardRejectedItems" :key="i" class="rejected-row">
-                <code>{{ it.type }}</code> {{ it.reason }}
+                {{ it.reason }}
               </div>
             </div>
           </div>
