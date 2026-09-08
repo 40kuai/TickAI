@@ -15,9 +15,9 @@ from hermes.tools.registry import registry, tool_error, tool_result
 _PROBE_COMMANDS = [
     ("df", "df -Th /"),
     ("journal", "journalctl --disk-usage 2>/dev/null || true"),
-    ("var_log", "find /var/log -maxdepth 2 -type f -size +50M 2>/dev/null | head -50"),
-    ("service", "find /data -maxdepth 3 -type f -path '*/logs/*' -size +50M 2>/dev/null | head -50"),
-    ("docker_log", "find /var/lib/docker/containers -maxdepth 2 -name '*-json.log' -size +50M 2>/dev/null | head -50"),
+    ("var_log", "find /var/log -maxdepth 2 -type f -size +50M -printf '%s %p\\n' 2>/dev/null | sort -rn | head -50"),
+    ("service", "find /data -maxdepth 3 -type f -path '*/logs/*' -size +50M -printf '%s %p\\n' 2>/dev/null | sort -rn | head -50"),
+    ("docker_log", "find /var/lib/docker/containers -maxdepth 2 -name '*-json.log' -size +50M -printf '%s %p\\n' 2>/dev/null | sort -rn | head -50"),
     ("docker_ps", "docker ps -a --format '{{.Names}} {{.Image}} {{.Status}}' 2>/dev/null | head -50"),
     ("docker_images", "docker images --format '{{.Repository}} {{.Tag}} {{.ID}} {{.CreatedAt}} {{.Size}}' 2>/dev/null | head -50"),
 ]
@@ -52,12 +52,23 @@ def _parse_journal(text: str) -> Dict[str, Any]:
     return {"disk_used": m.group(1) if m else None}
 
 
-def _parse_file_list(text: str, limit: int = 20) -> List[Dict[str, str]]:
+def _parse_file_list(text: str, limit: int = 20) -> List[Dict[str, Any]]:
+    """解析 'find -printf "%s %p\\n"' 输出 → [{path, size_mb}]，按大小倒序。"""
     out = []
     for raw in (text or "").splitlines():
-        p = raw.strip()
-        if p and len(out) < limit:
-            out.append({"path": p})
+        line = raw.strip()
+        if not line:
+            continue
+        parts = line.split(None, 1)
+        if len(parts) != 2:
+            continue
+        try:
+            size_mb = round(int(parts[0]) / 1024 / 1024, 1)
+        except ValueError:
+            continue
+        out.append({"path": parts[1], "size_mb": size_mb})
+        if len(out) >= limit:
+            break
     return out
 
 
