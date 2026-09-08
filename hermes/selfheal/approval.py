@@ -15,7 +15,7 @@ auto 为上层(decide/AI 合并)后的最终决策, 本模块仅规则层。
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from . import actions, config
 
@@ -106,15 +106,37 @@ def _default_judge(payload: Dict[str, Any]) -> Dict[str, Any]:
     raise RuntimeError("AI 判定未启用(approval._default_judge 未实现)")
 
 
-def _merge(judgement: Dict[str, Any], impact: Any, reasons: list) -> str:
-    """安全合并: 在规则放行区间内合并 AI 建议。auto 需满足三重条件。"""
-    rec = str((judgement or {}).get("recommendation", "approval"))
-    score = int((judgement or {}).get("risk_score", 5) or 5)
+def _coerce_score(value: Any) -> int:
+    """AI 输出的 risk_score 保守化: 非法/非整数/越界一律按 5(fail-closed 方向)。
+
+    防畸形输出(如 'high'、2.9)被 int() 截断后误放行 auto——
+    例如 int(2.9)=2 会通过 score<=2 门槛, 必须整体拒绝。
+    """
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return 5
+    if not f.is_integer() or not 1 <= f <= 5:
+        return 5
+    return int(f)
+
+
+def _merge(judgement: Optional[Dict[str, Any]], impact: Any, reasons: list) -> str:
+    """安全合并: 在规则放行区间内合并 AI 建议。auto 需满足三重条件。
+
+    非法输入(非 dict/score 畸形)在此不抛——score 由 _coerce_score 保守化,
+    其余按缺省 approval 处理, 保证 fail-closed 不变量不被畸形输出击穿。
+    """
+    judgement = judgement or {}
+    rec = str(judgement.get("recommendation", "approval"))
+    score = _coerce_score(judgement.get("risk_score", 5))
     if rec == "reject":
-        ai_reasons = (judgement or {}).get("reasons", [])
+        ai_reasons = judgement.get("reasons") or []
+        if not isinstance(ai_reasons, list):
+            ai_reasons = [str(ai_reasons)]
         reasons.append(f"AI 评估拒绝(risk={score}): {'; '.join(ai_reasons)}")
         return "reject"
-    if rec == "auto" and score <= 2 and impact is not None:
+    if rec == "auto" and score <= 2 and bool(impact):
         reasons.append(f"AI 评估自主执行(risk={score})且影响面已确认")
         return "auto"
     reasons.append(f"AI 评估建议 {rec}(risk={score})")
@@ -122,11 +144,11 @@ def _merge(judgement: Dict[str, Any], impact: Any, reasons: list) -> str:
 
 
 def decide(
-    server_id: int,
+    server_id: int,  # 统一出口签名预留: 供审计/流水追踪(当前未消费, 见 _judge_payload)
     action_name: str,
     target: Dict[str, Any],
     context: Optional[Dict[str, Any]] = None,
-    judge_fn=None,
+    judge_fn: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """统一审批出口。返回 {decision, severity, reasons, ai_judgement}。
 
@@ -145,6 +167,9 @@ def decide(
     judge = judge_fn if judge_fn is not None else _default_judge
     try:
         judgement = judge(_judge_payload(action_name, target, context))
+        # 合并也纳入 try: 畸形 judge 输出(非 dict/score 非法)一律 fail-closed,
+        # 不变量: 任何异常都不允许逃逸 decide 破坏"默认审批"语义。
+        decision = _merge(judgement, impact, reasons)
     except Exception as exc:  # noqa: BLE001
         logger.warning("AI 风险评估不可用(%s), fail-closed 默认审批: %s",
                        type(exc).__name__, exc)
@@ -152,7 +177,6 @@ def decide(
         return {"decision": "approval", "severity": "high",
                 "reasons": reasons, "ai_judgement": None}
 
-    decision = _merge(judgement, impact, reasons)
     severity = "low" if decision == "auto" else "high"
     return {"decision": decision, "severity": severity,
             "reasons": reasons, "ai_judgement": judgement}

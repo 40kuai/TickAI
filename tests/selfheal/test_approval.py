@@ -111,6 +111,65 @@ class DecideTests(unittest.TestCase):
         self.assertTrue(d["reasons"])
         self.assertEqual(d["ai_judgement"]["recommendation"], "auto")
 
+    def test_malformed_judgement_fail_closed(self):
+        # 对抗: judge 返回非 dict → 不得异常逃逸, fail-closed 审批
+        def _bad(payload):
+            return "not a dict"
+        d = approval.decide(1, "truncate_log",
+                            {"mount": "/", "path": "/var/log/nginx/access.log"},
+                            {"impact": {"files": 1}}, judge_fn=_bad)
+        self.assertEqual(d["decision"], "approval")
+
+    def test_non_numeric_score_fail_closed(self):
+        # 对抗: risk_score 非数字('high') → 保守 5 → approval, 不误放行
+        def _bad(payload):
+            return {"risk_score": "high", "recommendation": "auto", "reasons": []}
+        d = approval.decide(1, "truncate_log",
+                            {"mount": "/", "path": "/var/log/nginx/access.log"},
+                            {"impact": {"files": 1}}, judge_fn=_bad)
+        self.assertEqual(d["decision"], "approval")
+
+    def test_float_score_no_truncation_auto(self):
+        # 对抗: risk_score=2.9 不得被 int() 截断为 2 误放行 auto
+        def _bad(payload):
+            return {"risk_score": 2.9, "recommendation": "auto", "reasons": []}
+        d = approval.decide(1, "truncate_log",
+                            {"mount": "/", "path": "/var/log/nginx/access.log"},
+                            {"impact": {"files": 1}}, judge_fn=_bad)
+        self.assertEqual(d["decision"], "approval")
+
+    def test_auto_requires_impact_truthy(self):
+        # 对抗: impact={} 空字典不算影响面已确认 → fail-closed
+        def _auto(payload):
+            return {"risk_score": 1, "recommendation": "auto", "reasons": []}
+        d = approval.decide(1, "truncate_log",
+                            {"mount": "/", "path": "/var/log/nginx/access.log"},
+                            {"impact": {}}, judge_fn=_auto)
+        self.assertEqual(d["decision"], "approval")
+
+    def test_ai_auto_score_above_2_approval(self):
+        # 对抗: AI 建议 auto 但 score=3 > 2 → 不得 auto
+        def _med(payload):
+            return {"risk_score": 3, "recommendation": "auto", "reasons": []}
+        d = approval.decide(1, "truncate_log",
+                            {"mount": "/", "path": "/var/log/nginx/access.log"},
+                            {"impact": {"files": 1}}, judge_fn=_med)
+        self.assertEqual(d["decision"], "approval")
+
+    def test_hard_paths_ai_judgement_none(self):
+        # hard_rule 非 allow 路径 ai_judgement 必须为 None(哨兵: AI 未参与)
+        d = approval.decide(1, "run_cleanup_script",
+                            {"mount": "/", "category": "all"},
+                            {"impact": {"files": 3}}, judge_fn=self._judge)
+        self.assertEqual(d["decision"], "approval")
+        self.assertIsNone(d["ai_judgement"])
+        # 白名单外 → reject, ai_judgement 同样为 None
+        d2 = approval.decide(1, "truncate_log",
+                             {"mount": "/", "path": "/etc/passwd"},
+                             {"impact": {"files": 1}}, judge_fn=self._judge)
+        self.assertEqual(d2["decision"], "reject")
+        self.assertIsNone(d2["ai_judgement"])
+
 
 if __name__ == "__main__":
     unittest.main()
