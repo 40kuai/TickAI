@@ -1,9 +1,12 @@
 """Tests for hermes.selfheal.approval (unified approval gate)."""
+import json
 import os
 import unittest
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 from hermes.config import settings
+from hermes.data import db, models
 from hermes.selfheal import approval, config
 
 
@@ -235,6 +238,52 @@ class ParseJudgementTests(unittest.TestCase):
         with patch.object(settings, "LLM_API_KEY", return_value=""):
             with self.assertRaises(Exception):
                 approval._default_judge({})
+
+
+class CooldownActiveTests(unittest.TestCase):
+    """冷却去重: 用测试 DB 落库验证 cooldown_active 判定。"""
+
+    def setUp(self):
+        db.init_db()
+        with db.session_scope() as s:
+            s.query(models.SelfHealAction).delete()
+            if not s.query(models.Server).first():
+                cred = models.SSHCredential(name="c", username="root",
+                                            password="x", port=22, is_default=True)
+                s.add(cred)
+                s.flush()
+                s.add(models.Server(name="s", host="10.0.0.1",
+                                    ssh_credential_id=cred.id))
+        self._insert_executed(1, "disk_clean", "truncate_log", hours_ago=0.5)
+
+    def tearDown(self):
+        # 清理测试库记录, 避免污染同库其他用例
+        with db.session_scope() as s:
+            s.query(models.SelfHealAction).delete()
+
+    def _insert_executed(self, server_id, scene, action_name, hours_ago):
+        with db.session_scope() as s:
+            row = models.SelfHealAction(
+                server_id=server_id, scene=scene,
+                target=json.dumps({"mount": "/"}),
+                severity="low", action_name=action_name,
+                status="verified", triggered_by="auto",
+                success=True,
+                executed_at=datetime.now(timezone.utc) - timedelta(hours=hours_ago),
+            )
+            s.add(row)
+
+    def test_active_within_cooldown(self):
+        self.assertTrue(approval.cooldown_active(1, "disk_clean", "truncate_log", hours=1))
+
+    def test_inactive_beyond_cooldown(self):
+        self.assertFalse(approval.cooldown_active(1, "disk_clean", "truncate_log", hours=0.1))
+
+    def test_disabled_when_hours_zero(self):
+        self.assertFalse(approval.cooldown_active(1, "disk_clean", "truncate_log", hours=0))
+
+    def test_different_action_not_cooled(self):
+        self.assertFalse(approval.cooldown_active(1, "disk_clean", "clean_cache", hours=1))
 
 
 if __name__ == "__main__":

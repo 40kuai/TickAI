@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, Optional
 
 from . import actions, config
@@ -257,3 +258,32 @@ def decide(
     ai_judgement = judgement if isinstance(judgement, dict) else None
     return {"decision": decision, "severity": severity,
             "reasons": reasons, "ai_judgement": ai_judgement}
+
+
+def cooldown_active(server_id: int, scene: str, action_name: str,
+                    hours: Optional[float] = None) -> bool:
+    """同 server+scene+action 在冷却期内已有 已执行/已通过 记录 → True。
+
+    冷却期默认 config.COOLDOWN_HOURS; 传入 hours<=0 时关闭。
+    基于 executed_at(执行时间)判定, 状态限定 executed/verified(真正执行过)。
+    SQLite 存带时区 ISO 字符串, 与 naive UTC 的 since 做前缀字符串比较(同 UTC 序一致)。
+    """
+    from sqlalchemy import exists, and_
+
+    from hermes.data import db
+    from hermes.data.models import SelfHealAction
+
+    hours = hours if hours is not None else config.COOLDOWN_HOURS
+    if hours <= 0:
+        return False
+    since = datetime.utcnow() - timedelta(hours=hours)
+    with db.session_scope() as s:
+        q = s.query(exists().where(and_(
+            SelfHealAction.server_id == server_id,
+            SelfHealAction.scene == scene,
+            SelfHealAction.action_name == action_name,
+            SelfHealAction.executed_at.isnot(None),
+            SelfHealAction.executed_at >= since,
+            SelfHealAction.status.in_(("executed", "verified")),
+        )))
+        return bool(q.scalar())
