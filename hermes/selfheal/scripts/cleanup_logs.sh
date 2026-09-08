@@ -45,7 +45,8 @@ clean_docker_log() {
   [ -d /var/lib/docker/containers ] || { log "docker-log: docker 数据目录不存在, 跳过"; return 0; }
   find /var/lib/docker/containers -maxdepth 2 -name '*-json.log' \
     -size +${DOCKER_LOG_MAX_MB}M 2>/dev/null | while read -r f; do
-    log "docker-log: truncate $f"
+    sz=$(stat -c %s "$f" 2>/dev/null || echo 0)
+    log "docker-log: truncate $f $sz"
     [ -z "$DRY" ] && truncate -s 0 "$f" || true
   done || true
 }

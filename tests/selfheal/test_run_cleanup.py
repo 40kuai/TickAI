@@ -80,3 +80,47 @@ class DryRunTests(unittest.TestCase):
         impact = run_cleanup.parse_dry_run_output("")
         self.assertEqual(impact["files"], 0)
         self.assertEqual(impact["paths"], [])
+        self.assertEqual(impact["total_size_mb"], 0.0)
+        self.assertEqual(impact["planned_commands"], [])
+
+    def test_parse_dry_run_full_count_not_truncated(self):
+        # 对抗: 超过 50 条时 files 必须全量计数, 仅 paths 截断到 50(避免影响面低估)
+        lines = [
+            f"[cleanup][2026-09-08 10:00:{i:02d}] system: remove /var/log/f{i}.gz 1048576"
+            for i in range(60)
+        ]
+        impact = run_cleanup.parse_dry_run_output("\n".join(lines) + "\n")
+        self.assertEqual(impact["files"], 60)
+        self.assertEqual(len(impact["paths"]), 50)
+
+    def test_parse_dry_run_totals_size_mb(self):
+        # 对抗: 行尾 size(字节) 累计为可释放体积, 供 AI 估计影响面
+        out = (
+            "[cleanup][2026-09-08 10:00:00] system: remove /var/log/a.gz 1048576\n"
+            "[cleanup][2026-09-08 10:00:01] system: remove /var/log/b.1 5242880\n"
+            "[cleanup][2026-09-08 10:00:02] service: truncate /data/app/logs/x.log 1048576\n"
+        )
+        impact = run_cleanup.parse_dry_run_output(out)
+        self.assertEqual(impact["files"], 3)
+        self.assertEqual(impact["total_size_mb"], 7.0)  # (1+5+1)MB
+
+    def test_parse_dry_run_planned_commands(self):
+        # 对抗: docker-prune 等 dry 模式输出计划命令, AI 可识别"有动作但文件数/体积不可测"
+        out = (
+            "[cleanup][2026-09-08 10:00:00] docker-prune: would run: docker container prune -f\n"
+            "[cleanup][2026-09-08 10:00:01] docker-prune: would run: docker image prune -f\n"
+        )
+        impact = run_cleanup.parse_dry_run_output(out)
+        self.assertEqual(impact["files"], 0)
+        self.assertEqual(
+            impact["planned_commands"],
+            ["docker container prune -f", "docker image prune -f"],
+        )
+
+    def test_parse_dry_run_path_with_space(self):
+        # 对抗: 含空格路径不被截断(正则捕获到行尾, 仅末尾数字视为 size)
+        out = "[cleanup][2026-09-08 10:00:00] service: truncate /data/app logs/app log.1 2097152\n"
+        impact = run_cleanup.parse_dry_run_output(out)
+        self.assertEqual(impact["files"], 1)
+        self.assertEqual(impact["paths"], ["/data/app logs/app log.1"])
+        self.assertEqual(impact["total_size_mb"], 2.0)

@@ -54,10 +54,15 @@ def build_cleanup_command(category: str | None) -> str:
     return f"{env_prefix} bash -s -- {category}"
 
 
-# 脚本 dry 模式输出行: "[cleanup][ts] <category>: remove|truncate <path>"
+# 脚本输出行: "[cleanup][ts] <category>: remove|truncate <path> [<size_bytes>]"
+# 类别名通用化(不再硬编码 system/service/docker-log); 路径允许含空格;
+# 末尾可选 size(字节) 供影响面体积估计。
 _REMOVE_LINE_RE = re.compile(
-    r"\b(?:system|service|docker-log):\s+(?:remove|truncate)\s+(\S+)"
+    r"\b([a-z][a-z0-9-]*):\s+(?:remove|truncate)\s+(.+?)(?:\s+(\d+))?$",
+    re.MULTILINE,
 )
+# dry 模式计划命令行: "[cleanup][ts] <category>: would run: <cmd>"
+_PLANNED_RE = re.compile(r"\b([a-z][a-z0-9-]*):\s+would\s+run:\s+(.+)")
 
 
 def build_dry_run_command(category: str | None) -> str:
@@ -70,11 +75,24 @@ def build_dry_run_command(category: str | None) -> str:
 
 
 def parse_dry_run_output(stdout: str) -> dict[str, object]:
-    """统计 dry-run 输出: {files: 将处理文件数, paths: 路径列表(上限 50)}。"""
-    paths = []
-    for m in _REMOVE_LINE_RE.finditer(stdout or ""):
-        paths.append(m.group(1))
-        if len(paths) >= 50:
-            break
-    return {"files": len(paths), "paths": paths}
+    """统计 dry-run 输出影响面。
+
+    返回 {files, paths, total_size_mb, planned_commands}:
+      files: 全量 remove/truncate 行数(不截断, 避免影响面低估)
+      paths: 前 50 条被处理路径(供展示)
+      total_size_mb: remove/truncate 行附带 size 累计(MB, 保留 1 位; 无 size 数据为 0.0)
+      planned_commands: dry 模式输出的计划执行命令(前 20 条, 如 docker-prune,
+                        其文件数/体积不可预估, 供 AI 识别"有动作但不可测")
+    """
+    text = stdout or ""
+    matches = list(_REMOVE_LINE_RE.finditer(text))
+    paths = [m.group(2) for m in matches[:50]]
+    total_bytes = sum(int(m.group(3)) for m in matches if m.group(3) is not None)
+    planned = [m.group(2) for m in _PLANNED_RE.finditer(text)][:20]
+    return {
+        "files": len(matches),
+        "paths": paths,
+        "total_size_mb": round(total_bytes / 1048576, 1),
+        "planned_commands": planned,
+    }
 
