@@ -386,6 +386,56 @@ const wizardStrategy = computed(() => ({
 // 向导可提交条件: 已选服务器 且 至少勾选一项
 const canSubmitWizard = computed(() => Boolean(cleanupForm.server_id) && selected.value.size > 0)
 
+// 提交向导(ai-plan), 结果结构化展示
+async function handleSubmitWizard() {
+  if (wizardRunning.value) return
+  wizardError.value = ''
+  wizardResult.value = null
+  if (!cleanupForm.server_id) {
+    wizardError.value = '请选择服务器'
+    return
+  }
+  if (!selected.value.size) {
+    wizardError.value = '请先扫描，再勾选要清理的项'
+    return
+  }
+  // journal size 收敛到 [1,10000] 整数(防止手输 0/负/空)
+  if (selected.value.has('journal')) {
+    journalSize.value = Math.min(Math.max(Number(journalSize.value) || 1, 1), 10000)
+  }
+  wizardRunning.value = true
+  try {
+    const res = await api.post('/selfheal/ai-plan', {
+      server_id: Number(cleanupForm.server_id),
+      strategy: wizardStrategy.value,
+    })
+    wizardResult.value = res.data
+    selected.value = new Map() // 提交成功后清空勾选
+    await refreshActionsAndStats()
+  } catch (err) {
+    wizardError.value = err.response?.data?.detail || '提交清理失败'
+  } finally {
+    wizardRunning.value = false
+  }
+}
+
+// 提交结果派生: {plan_id, accepted, rejected, auto, items}
+const wizardSummary = computed(() => {
+  const r = wizardResult.value || {}
+  return {
+    accepted: r.accepted ?? 0,
+    pending: Math.max((r.accepted ?? 0) - (r.auto ?? 0), 0), // 挂单数 = 受理 - 直执
+    auto: r.auto ?? 0,
+    rejected: r.rejected ?? 0,
+  }
+})
+// 被拒项(携带 reason 的 items)
+const wizardRejectedItems = computed(() => {
+  const r = wizardResult.value || {}
+  const items = Array.isArray(r.items) ? r.items : []
+  return items.filter((it) => it && it.reason)
+})
+
 // 磁盘使用率: scanResult.disk 是多挂载点对象 {<mount>: {use_pct, used, avail}}
 const diskMounts = computed(() => Object.entries(scanResult.value?.disk || {}))
 function diskTone(pct) {
@@ -671,6 +721,61 @@ onMounted(loadAll)
               <span class="residue-desc">→ docker-prune 整批回收</span>
               <span class="badge badge-danger">高风险 · 强制人工审批</span>
             </label>
+          </div>
+        </div>
+      </div>
+
+      <!-- ② 提交清理(向导) -->
+      <div class="wizard-submit">
+        <div v-if="selectedList.length" class="selected-panel">
+          <div class="selected-head">
+            <span class="selected-title">已选清理项（{{ selectedList.length }}）</span>
+          </div>
+          <div class="selected-list">
+            <div v-for="[key, sel] in selectedList" :key="key" class="selected-row">
+              <span class="selected-label" :title="sel.label">{{ sel.label }}</span>
+              <span class="badge" :class="sel.risk === 'high' ? 'badge-danger' : 'badge-warning'">
+                {{ sel.risk === 'high' ? '强制审批' : '按风险审批' }}
+              </span>
+              <button class="btn btn-secondary btn-sm" @click="removeSelected(key)">移除</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="wizard-preview">
+          <span class="detail-label">策略预览（提交内容，只读）</span>
+          <pre class="detail-pre">{{ JSON.stringify(wizardStrategy, null, 2) }}</pre>
+        </div>
+
+        <div v-if="wizardError" class="error-tip">{{ wizardError }}</div>
+        <div class="form-actions">
+          <button class="btn btn-primary" :disabled="wizardRunning || !canSubmitWizard" @click="handleSubmitWizard">
+            {{ wizardRunning ? '提交中…' : '提交清理（按风险审批）' }}
+          </button>
+        </div>
+
+        <!-- 提交结果(结构化) -->
+        <div v-if="wizardResult" class="result-box">
+          <div class="result-head">
+            <span class="result-title">提交结果</span>
+            <button class="result-close" @click="wizardResult = null">×</button>
+          </div>
+          <div class="wizard-body">
+            <div class="submit-summary">
+              <span class="submit-stat">受理 {{ wizardSummary.accepted }} 项</span>
+              <span class="submit-stat">（挂审批单 {{ wizardSummary.pending }} / 自动执行 {{ wizardSummary.auto }}）</span>
+              <span v-if="wizardSummary.rejected" class="submit-stat danger">拒绝 {{ wizardSummary.rejected }} 项</span>
+            </div>
+            <div v-if="wizardResult.plan_id" class="residue-row">
+              批次号：<code>{{ wizardResult.plan_id }}</code>
+              <span class="residue-desc">挂单的项请到下方「审批队列」处理</span>
+            </div>
+            <div v-if="wizardRejectedItems.length" class="rejected-panel">
+              <div class="selected-title">被拒项及原因</div>
+              <div v-for="(it, i) in wizardRejectedItems" :key="i" class="rejected-row">
+                <code>{{ it.type }}</code> {{ it.reason }}
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -1175,4 +1280,18 @@ textarea.form-input {
 .residue-label { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .residue-desc { color: var(--color-text-secondary); font-size: 12px; }
 .journal-size { width: 70px; padding: 4px 6px; border: 1px solid var(--color-border-light); border-radius: var(--radius-sm); font-size: 12px; }
+.wizard-submit { margin-top: 14px; display: flex; flex-direction: column; gap: 12px; }
+.selected-panel { border: 1px solid var(--color-border-light); border-radius: var(--radius-sm); overflow: hidden; }
+.selected-head { padding: 8px 14px; background: var(--color-border-light); }
+.selected-title { font-size: 13px; font-weight: 600; }
+.selected-list { display: flex; flex-direction: column; }
+.selected-row { display: flex; align-items: center; gap: 8px; padding: 6px 14px; font-size: 12px; }
+.selected-row + .selected-row { border-top: 1px solid var(--color-border-light); }
+.selected-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: 'SF Mono', Menlo, monospace; }
+.wizard-preview { display: flex; flex-direction: column; gap: 4px; }
+.submit-summary { display: flex; gap: 10px; flex-wrap: wrap; font-size: 13px; }
+.submit-stat { font-weight: 600; }
+.submit-stat.danger { color: var(--color-danger); }
+.rejected-panel { border: 1px solid rgba(239, 68, 68, 0.35); border-radius: var(--radius-sm); padding: 10px; display: flex; flex-direction: column; gap: 6px; }
+.rejected-row { font-size: 12px; word-break: break-all; }
 </style>
