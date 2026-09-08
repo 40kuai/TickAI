@@ -10,11 +10,11 @@ class CooldownConfigTests(unittest.TestCase):
         self.assertEqual(config.COOLDOWN_HOURS, 6)
 
     def test_reload_picks_env(self):
+        self.addCleanup(config.reload_config)
+        self.addCleanup(os.environ.pop, "SELFHEAL_COOLDOWN_HOURS", None)
         os.environ["SELFHEAL_COOLDOWN_HOURS"] = "12"
         config.reload_config()
         self.assertEqual(config.COOLDOWN_HOURS, 12)
-        os.environ.pop("SELFHEAL_COOLDOWN_HOURS", None)
-        config.reload_config()
 
 
 class HardRuleTests(unittest.TestCase):

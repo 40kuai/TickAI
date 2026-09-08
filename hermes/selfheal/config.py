@@ -33,6 +33,14 @@ def _parse_hours(raw: str) -> List[Tuple[int, int]]:
     return ranges
 
 
+def _parse_int(key: str, default: int) -> int:
+    """解析整数配置; 空值/非数字回退默认, 与 _split_csv/_parse_hours 容错一致。"""
+    try:
+        return int(settings.get(key, "") or default)
+    except ValueError:
+        return default
+
+
 # 磁盘/缓存分级阈值（百分比）
 DISK_LOW_PCT = 80
 DISK_HIGH_PCT = 90
@@ -54,7 +62,7 @@ LOG_CLEANUP_CATEGORIES: List[str] = _split_csv("SELFHEAL_LOG_CLEANUP_CATEGORIES_
 
 # 统一审批出口: 同类操作冷却期(小时)。冷却期内同 server+scene+action 已执行过
 # (executed/verified) 则不再生成审批单, 防自动探测周期性触发造成审批疲劳。
-COOLDOWN_HOURS = int(settings.get("SELFHEAL_COOLDOWN_HOURS", "6") or 6)
+COOLDOWN_HOURS = _parse_int("SELFHEAL_COOLDOWN_HOURS", 6)
 
 # 清理脚本内部阈值（MB/天）
 JOURNAL_VACUUM_SIZE_MB = 200
@@ -75,4 +83,4 @@ def reload_config() -> None:
     DROPCACHES_MODES_WHITELIST = _split_csv("SELFHEAL_DROPCACHES_MODES_WHITELIST")
     PEAK_HOURS = _parse_hours(settings.get("SELFHEAL_PEAK_HOURS", "9-18"))
     LOG_CLEANUP_CATEGORIES = _split_csv("SELFHEAL_LOG_CLEANUP_CATEGORIES_WHITELIST")
-    COOLDOWN_HOURS = int(settings.get("SELFHEAL_COOLDOWN_HOURS", "6") or 6)
+    COOLDOWN_HOURS = _parse_int("SELFHEAL_COOLDOWN_HOURS", 6)

@@ -1,5 +1,6 @@
-"""统一审批出口：所有写操作在此决策 auto / approval / reject。
+"""统一审批出口：所有写操作在此决策 allow / approval / reject。
 
+auto 为上层(decide/AI 合并)后的最终决策, 本模块仅规则层。
 双轨制(安全侧合并, 取更严格):
 - 规则硬约束: 基于操作影响风险静态表 ACTION_RISK + 白名单渲染校验, 不可协商。
   基础风险 high(不可逆批量/未知动作) → 强制审批; 白名单外 → 拒绝。
@@ -13,12 +14,9 @@
 """
 from __future__ import annotations
 
-import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from . import actions, config
-
-logger = logging.getLogger(__name__)
 
 # 操作影响风险静态表(审批判定依据, "做什么"由表定; "动多大"由 AI 估)。
 # base: low|medium|high —— high 为规则硬约束, 强制人工审批, AI 无权放行。
@@ -36,18 +34,22 @@ ACTION_RISK: Dict[str, Dict[str, str]] = {
 _HIGH_RISK_CATEGORIES = ("docker-prune",)
 
 
-def _cleanup_risk(category: str) -> str:
+def _cleanup_risk_with_note(category: str) -> tuple[str, bool]:
+    """脚本类 category → (风险级, 是否 docker-prune 不可逆清理)。
+
+    唯一判定源: category 为 docker-prune, 或 category=all 且白名单含 docker-prune
+    → (high, True); 其余 (medium, False)。供风险分级与 reason 标注共用。
+    """
     cat = (category or "").strip() or "all"
-    if cat in _HIGH_RISK_CATEGORIES:
-        return "high"
-    if cat == "all" and "docker-prune" in config.LOG_CLEANUP_CATEGORIES:
-        return "high"
-    return "medium"
+    is_prune_note = cat in _HIGH_RISK_CATEGORIES or (
+        cat == "all" and "docker-prune" in config.LOG_CLEANUP_CATEGORIES
+    )
+    return ("high" if is_prune_note else "medium"), is_prune_note
 
 
 def _base_risk(action_name: str, target: Dict[str, Any]) -> str:
     if action_name == "run_cleanup_script":
-        return _cleanup_risk(str((target or {}).get("category", "")))
+        return _cleanup_risk_with_note(str((target or {}).get("category", "")))[0]
     risk = ACTION_RISK.get(action_name)
     if risk is None:
         return "high"  # 未知动作保守 high(随后 render 校验会 reject)
@@ -70,12 +72,12 @@ def hard_rule(action_name: str, target: Dict[str, Any]) -> Dict[str, Any]:
         reason = (f"操作影响风险=high(不可逆/批量), 强制人工审批"
                   f"[reversible={extra.get('reversible', '?')}, "
                   f"rebuild_cost={extra.get('rebuild_cost', '?')}]")
-        # 脚本类: 白名单含 docker-prune(或 category=all 且 all 含 docker-prune) → 标注不可逆清理
+        # 脚本类: 判定源与风险分级一致(_cleanup_risk_with_note) → 标注不可逆清理
         if action_name == "run_cleanup_script":
-            cat = str(target.get("category", "")).strip() or "all"
-            if cat in _HIGH_RISK_CATEGORIES or (
-                cat == "all" and "docker-prune" in config.LOG_CLEANUP_CATEGORIES
-            ):
+            _, is_prune_note = _cleanup_risk_with_note(
+                str(target.get("category", ""))
+            )
+            if is_prune_note:
                 reason += "; 包含 docker-prune 不可逆清理"
         return {"decision": "approval", "reasons": [reason]}
     return {"decision": "allow",
