@@ -13,7 +13,7 @@ from typing import Any, Dict, Optional
 from hermes.data import db
 from hermes.data.models import SelfHealAction
 
-from . import actions, config, detect, grading
+from . import actions, approval, config, detect, run_cleanup
 
 logger = logging.getLogger(__name__)
 
@@ -52,9 +52,8 @@ def verify_recovered(scene: str, target: Dict[str, Any], out: str,
         pct = detect.parse_df_usage(out, target.get("mount", ""))
         if pct is None:
             return False
-        if baseline_pct is None:
-            return pct < config.DISK_LOW_PCT  # 无基线时退化为绝对阈值
-        return pct < baseline_pct
+        # 验证语义: 清理须降到安全水位以下(触发=必要性, 验证=是否真恢复)
+        return pct < config.DISK_LOW_PCT
     if scene == "process_restart":
         return detect.parse_systemctl_active(out)
     if scene == "disk_clean":
@@ -131,38 +130,66 @@ def _run(
         return {"severity": "ok", "status": "noop", "success": True,
                 "reason": f"未检测到异常 (metric={metric})"}
 
-    # ---- 2. 分级 ----
-    g = grading.grade(scene, {"value": metric}, {"name": f"server-{server_id}"})
+    # ---- 2. 冷却去重(同操作短时间内已执行过, 防审批疲劳) ----
+    if approval.cooldown_active(server_id, scene, action_name):
+        return {"severity": "ok", "status": "noop", "success": True,
+                "reason": f"{action_name} 处于冷却期内, 跳过重复处理"}
 
-    # ---- 3. 低危自主 / 高危审批 ----
-    if not g["can_auto"]:
-        record = _persist(server_id, scene, target, g["severity"], action_name,
-                          "pending", triggered_by, reasons=g["reasons"],
-                          rendered_command=None)
-        return {"severity": g["severity"], "status": "pending", "success": False,
-                "action_id": record.id, "reasons": g["reasons"],
+    # ---- 3. 影响面采集(仅脚本类: dry-run 只读预览, 供审批决策依据) ----
+    impact = None
+    if action_name == "run_cleanup_script":
+        dry = actions.exec_ssh(
+            server_id,
+            run_cleanup.build_dry_run_command(target.get("category", "")),
+            timeout=60)
+        if dry.get("success"):
+            impact = run_cleanup.parse_dry_run_output(dry.get("stdout", ""))
+    elif target.get("path"):
+        # 单文件动作: 影响面=1 个文件(大小未知, 交由 AI 结合扫描/常识判断)
+        impact = {"files": 1}
+
+    # ---- 4. 统一审批出口(触发与审批解耦: 操作影响风险 → auto/approval/reject) ----
+    d = approval.decide(
+        server_id, action_name, target,
+        {"scene": scene, "triggered_by": triggered_by,
+         "metric": metric, "impact": impact},
+    )
+    if d["decision"] == "reject":
+        _persist(server_id, scene, target, d["severity"], action_name,
+                 "rejected", triggered_by, reasons=d["reasons"],
+                 rendered_command=None)
+        return {"severity": d["severity"], "status": "rejected",
+                "success": False, "reasons": d["reasons"],
                 "action_name": action_name,
-                "message": "高危操作，已生成审批单等待人工批准"}
+                "reason": "审批出口拒绝: " + "; ".join(d["reasons"])}
+    if d["decision"] == "approval":
+        record = _persist(server_id, scene, target, d["severity"], action_name,
+                          "pending", triggered_by, reasons=d["reasons"],
+                          rendered_command=None)
+        return {"severity": d["severity"], "status": "pending", "success": False,
+                "action_id": record.id, "reasons": d["reasons"],
+                "action_name": action_name,
+                "message": "需人工审批, 已生成审批单"}
 
-    # ---- 4. 渲染（模板白名单，全流程仅渲染一次） ----
+    # ---- 5. auto: 渲染(模板白名单, 全流程仅渲染一次) + 执行验证 ----
     try:
         command = actions.render_command(action_name, target)
     except ValueError as exc:
-        _persist(server_id, scene, target, g["severity"], action_name,
+        _persist(server_id, scene, target, d["severity"], action_name,
                  "failed", triggered_by, reasons=[str(exc)],
                  rendered_command=None)
-        return {"severity": g["severity"], "status": "failed", "success": False,
+        return {"severity": d["severity"], "status": "failed", "success": False,
                 "reason": str(exc)}
 
-    record = _persist(server_id, scene, target, g["severity"], action_name,
-                      "executing", triggered_by, reasons=g["reasons"],
+    record = _persist(server_id, scene, target, d["severity"], action_name,
+                      "executing", triggered_by, reasons=d["reasons"],
                       rendered_command=command)
     record = execute_and_verify(record, target, command)
 
     result = {
-        "severity": g["severity"], "status": record.status,
+        "severity": d["severity"], "status": record.status,
         "success": record.success, "action_id": record.id,
-        "action_name": action_name, "reasons": g["reasons"],
+        "action_name": action_name, "reasons": d["reasons"],
         "rendered_command": command,
     }
     if record.status == "failed" and record.execution_result:
