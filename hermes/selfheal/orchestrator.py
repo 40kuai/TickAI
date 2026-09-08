@@ -1,7 +1,8 @@
-"""自愈编排器：探测→分级→执行/审批→验证→落库。
+"""自愈编排器：探测→冷却→影响面采集→统一审批出口→执行/审批→验证→落库。
 
 确定性流程，不依赖 LLM 自由发挥——成功率可测试可度量。
-低危自主执行；高危落审批单等待人工批准；写命令只来自模板白名单。
+触发(检测异常)与审批(操作影响风险)解耦: 统一经 approval.decide 三态
+auto/approval/reject 决策; 写命令只来自模板白名单。
 """
 from __future__ import annotations
 
@@ -24,7 +25,7 @@ SCENE_ACTION = {
     "log_cleanup_script": "run_cleanup_script",
 }
 
-# 清理类场景: 验证语义 = 磁盘使用率较执行前下降
+# 清理类场景: 验证语义 = 清理后须降到安全水位 DISK_LOW_PCT 以下
 CLEANUP_SCENES = ("log_cleanup_script", "ai_log_cleanup")
 
 # 各场景 target 必填 key（缺失直接抛 ValueError，由顶层 catch 兜底落库）
@@ -82,15 +83,19 @@ def run_selfheal(
     try:
         return _run(server_id, scene, target, triggered_by, action_name)
     except Exception as exc:  # noqa: BLE001
-        logger.exception("自愈流程未预期异常: scene=%s server_id=%s", scene, server_id)
+        logger.exception("自愈流程异常: scene=%s server_id=%s", scene, server_id)
+        action_id = None
         try:
-            _persist(server_id, scene, target, "high",
-                     action_name or SCENE_ACTION.get(scene) or "unknown",
-                     "failed", triggered_by,
-                     execution={"error": str(exc)}, rendered_command=None)
+            record = _persist(server_id, scene, target, "high",
+                              action_name or SCENE_ACTION.get(scene) or "unknown",
+                              "failed", triggered_by,
+                              execution={"error": str(exc)}, rendered_command=None)
+            action_id = record.id
         except Exception:  # noqa: BLE001
             logger.exception("自愈异常落库失败: scene=%s server_id=%s", scene, server_id)
-        return {"status": "failed", "success": False, "reason": f"自愈流程异常: {exc}"}
+        return {"severity": "high", "status": "failed", "success": False,
+                "action_id": action_id,
+                "reason": f"自愈流程异常: {exc}"}
 
 
 def _run(
@@ -109,10 +114,11 @@ def _run(
     probe_cmd = detect.probe_command(scene, target)
     probe = actions.exec_ssh(server_id, probe_cmd)
     if not probe["success"]:
-        _persist(server_id, scene, target, "low", action_name, "failed",
-                 triggered_by, execution={"error": probe.get("error")},
-                 rendered_command=None)
+        record = _persist(server_id, scene, target, "low", action_name, "failed",
+                          triggered_by, execution={"error": probe.get("error")},
+                          rendered_command=None)
         return {"severity": "low", "status": "failed", "success": False,
+                "action_id": record.id, "action_name": action_name,
                 "reason": f"探测失败: {probe.get('error')}"}
 
     metric = _probe_metric(scene, target, probe["stdout"])
@@ -138,12 +144,24 @@ def _run(
     # ---- 3. 影响面采集(仅脚本类: dry-run 只读预览, 供审批决策依据) ----
     impact = None
     if action_name == "run_cleanup_script":
-        dry = actions.exec_ssh(
-            server_id,
-            run_cleanup.build_dry_run_command(target.get("category", "")),
-            timeout=60)
+        try:
+            dry_cmd = run_cleanup.build_dry_run_command(target.get("category", ""))
+        except ValueError as exc:
+            # 白名单外 category → 拒绝(与 hard_rule 同语义), 不逃逸为顶层 failed
+            record = _persist(server_id, scene, target, "high", action_name,
+                              "rejected", triggered_by, reasons=[str(exc)],
+                              rendered_command=None)
+            return {"severity": "high", "status": "rejected", "success": False,
+                    "action_id": record.id, "action_name": action_name,
+                    "reasons": [str(exc)],
+                    "reason": "审批出口拒绝: " + str(exc)}
+        dry = actions.exec_ssh(server_id, dry_cmd, timeout=60)
         if dry.get("success"):
             impact = run_cleanup.parse_dry_run_output(dry.get("stdout", ""))
+        else:
+            # 影响面未知(采集失败) → 留空交由 decide fail-closed 到 approval
+            logger.warning("影响面采集失败: server_id=%s action=%s err=%s",
+                           server_id, action_name, dry.get("error"))
     elif target.get("path"):
         # 单文件动作: 影响面=1 个文件(大小未知, 交由 AI 结合扫描/常识判断)
         impact = {"files": 1}
@@ -155,12 +173,12 @@ def _run(
          "metric": metric, "impact": impact},
     )
     if d["decision"] == "reject":
-        _persist(server_id, scene, target, d["severity"], action_name,
-                 "rejected", triggered_by, reasons=d["reasons"],
-                 rendered_command=None)
+        record = _persist(server_id, scene, target, d["severity"], action_name,
+                          "rejected", triggered_by, reasons=d["reasons"],
+                          rendered_command=None)
         return {"severity": d["severity"], "status": "rejected",
-                "success": False, "reasons": d["reasons"],
-                "action_name": action_name,
+                "success": False, "action_id": record.id,
+                "action_name": action_name, "reasons": d["reasons"],
                 "reason": "审批出口拒绝: " + "; ".join(d["reasons"])}
     if d["decision"] == "approval":
         record = _persist(server_id, scene, target, d["severity"], action_name,
@@ -175,6 +193,7 @@ def _run(
     try:
         command = actions.render_command(action_name, target)
     except ValueError as exc:
+        # hard_rule 已在 decide 内完成白名单校验, 此处仅兜底渲染-执行间的配置竞态
         _persist(server_id, scene, target, d["severity"], action_name,
                  "failed", triggered_by, reasons=[str(exc)],
                  rendered_command=None)
@@ -208,10 +227,10 @@ def execute_and_verify(record, target, command, approver=None):
     command: 已渲染的白名单命令。
     approver: 审批人用户名,审批路径传入并记录 approver/approved_at。
     流程:
-      0. 清理类场景记录执行前磁盘基线(供"较基线下降"验证语义);
+      0. 清理类场景记录执行前磁盘基线(仅供审计参考, 不再参与验证判定);
       1. 经 exec_action 执行写命令(支持脚本 stdin 注入),失败置 failed;
-      2. 用 detect.probe_command 探测 + verify_recovered 判定 →
-         verified(success=True)/verification_failed(success=False)。
+      2. 用 detect.probe_command 探测 + verify_recovered 判定(清理类须降到
+         DISK_LOW_PCT 安全水位以下) → verified(success=True)/verification_failed(success=False)。
     返回更新后的 record(在打开的 session 内读回)。
     """
     action_id = record.id

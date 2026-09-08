@@ -150,6 +150,7 @@ class RunLowRiskDiskTests(_SelfHealTestCase):
                 {"mount": "/", "path": "/tmp/not-whitelisted.log"}, "user")
         self.assertEqual(result["status"], "rejected")
         self.assertFalse(result["success"])
+        self.assertIn("action_id", result)
         with db.session_scope() as s:
             row = s.query(models.SelfHealAction).filter_by(status="rejected").first()
             self.assertIsNotNone(row)
@@ -339,11 +340,14 @@ class UnifiedGateTests(_SelfHealTestCase):
         super().setUp()
         os.environ["SELFHEAL_LOG_CLEANUP_CATEGORIES_WHITELIST"] = "system"
         os.environ["SELFHEAL_LOG_PATH_WHITELIST"] = "/var/log/nginx/access.log"
+        # 固定冷却时长, 避免受外部 SELFHEAL_COOLDOWN_HOURS 影响导致 flaky
+        os.environ["SELFHEAL_COOLDOWN_HOURS"] = "6"
         config.reload_config()
 
     def tearDown(self):
         os.environ.pop("SELFHEAL_LOG_CLEANUP_CATEGORIES_WHITELIST", None)
         os.environ.pop("SELFHEAL_LOG_PATH_WHITELIST", None)
+        os.environ.pop("SELFHEAL_COOLDOWN_HOURS", None)
         config.reload_config()
 
     def test_high_risk_cleanup_script_hangs_approval_ticket(self):
@@ -411,6 +415,33 @@ class UnifiedGateTests(_SelfHealTestCase):
                 {"mount": "/", "path": "/var/log/nginx/access.log"}, "user")
         self.assertEqual(result["status"], "noop")
         self.assertIn("冷却", result["reason"])
+
+    def test_cleanup_script_invalid_category_rejected(self):
+        # 白名单外 category → build_dry_run_command 抛 ValueError → rejected(与 hard_rule 同语义),
+        # 而非逃逸到顶层 catch 变成 failed(避免污染成功率分母)
+        with _mock_exec([
+                {"success": True, "exit_code": 0,
+                 "stdout": "Filesystem Type Size Used Avail Use% Mounted on\n"
+                           "/dev/vda1 ext4 50G 42G 8G 85% /\n", "stderr": ""},  # 探测
+        ]):
+            result = orchestrator.run_selfheal(
+                1, "log_cleanup_script",
+                {"category": "rm -rf", "mount": "/"}, "user")
+        self.assertEqual(result["status"], "rejected")
+        self.assertFalse(result["success"])
+        with db.session_scope() as s:
+            row = s.query(models.SelfHealAction).filter_by(status="rejected").first()
+            self.assertIsNotNone(row)
+            self.assertIn("不在白名单", row.grade_reasons or "")
+
+    def test_verify_recovered_cleanup_below_safe_water_level_required(self):
+        # 清理后 85%: 较基线 92% 有下降, 但仍高于安全水位 DISK_LOW_PCT(80%) → 未恢复
+        recovered = orchestrator.verify_recovered(
+            "ai_log_cleanup", {"mount": "/"},
+            "Filesystem Type Size Used Avail Use% Mounted on\n"
+            "/dev/vda1 ext4 50G 42G 8G 85% /\n",
+            baseline_pct=92)
+        self.assertFalse(recovered)
 
 
 if __name__ == "__main__":
