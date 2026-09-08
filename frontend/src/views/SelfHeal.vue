@@ -386,6 +386,34 @@ const wizardStrategy = computed(() => ({
 // 向导可提交条件: 已选服务器 且 至少勾选一项
 const canSubmitWizard = computed(() => Boolean(cleanupForm.server_id) && selected.value.size > 0)
 
+// 磁盘使用率: scanResult.disk 是多挂载点对象 {<mount>: {use_pct, used, avail}}
+const diskMounts = computed(() => Object.entries(scanResult.value?.disk || {}))
+function diskTone(pct) {
+  if (pct >= 80) return 'danger'
+  if (pct >= 60) return 'warning'
+  return 'success'
+}
+// docker 残留: dangling 镜像数 + 停止容器数
+const dockerResidue = computed(() => {
+  const img = scanResult.value?.docker_images || {}
+  const stopped = (scanResult.value?.docker_containers || []).filter(
+    (c) => !String(c.status || '').toLowerCase().includes('up')
+  )
+  return { dangling: img.dangling || 0, stopped: stopped.length }
+})
+// 大文件 tab: 记录当前激活 tab
+const fileTab = ref('var_log')
+const FILE_TABS = [
+  { key: 'var_log', label: '/var/log' },
+  { key: 'service_logs', label: '服务日志 /data' },
+  { key: 'docker_logs', label: 'Docker 容器日志' },
+]
+const activeFileRows = computed(() => {
+  if (fileTab.value === 'service_logs') return serviceLogRows.value
+  if (fileTab.value === 'docker_logs') return dockerLogRows.value
+  return varLogRows.value
+})
+
 // 触发固定清理脚本(统一审批出口: auto 直执/approval 挂单/reject 拒绝)
 async function handleCleanup() {
   if (cleanupRunning.value) return
@@ -576,14 +604,71 @@ onMounted(loadAll)
         </button>
       </div>
 
-      <!-- 扫描结果 -->
+      <!-- 扫描结果(结构化) -->
       <div v-if="scanError" class="error-tip">{{ scanError }}</div>
-      <div v-if="scanResult" class="result-box">
+      <div v-if="scanResult" class="wizard-result">
         <div class="result-head">
-          <span class="result-title">扫描结果</span>
+          <span class="result-title">扫描结果（只读）</span>
           <button class="result-close" @click="scanResult = null">×</button>
         </div>
-        <pre class="result-pre">{{ JSON.stringify(scanResult, null, 2) }}</pre>
+        <div class="wizard-body">
+          <!-- 磁盘使用率 -->
+          <div v-if="diskMounts.length" class="disk-cards">
+            <div v-for="[mount, info] in diskMounts" :key="mount" class="disk-card" :class="'disk-' + diskTone(info.use_pct)">
+              <span class="disk-mount">{{ mount }}</span>
+              <span class="disk-pct">{{ info.use_pct }}%</span>
+              <span class="disk-detail">已用 {{ info.used }} / 可用 {{ info.avail }}</span>
+            </div>
+          </div>
+
+          <!-- 大文件清单(tab) -->
+          <div v-if="activeFileRows.length" class="file-section">
+            <div class="file-tabs">
+              <button
+                v-for="t in FILE_TABS"
+                :key="t.key"
+                class="file-tab"
+                :class="{ active: fileTab === t.key }"
+                @click="fileTab = t.key"
+              >
+                {{ t.label }}（{{ t.key === 'service_logs' ? serviceLogRows.length : t.key === 'docker_logs' ? dockerLogRows.length : varLogRows.length }}）
+              </button>
+            </div>
+            <div class="file-list">
+              <label v-for="row in activeFileRows" :key="selKey(row)" class="file-row">
+                <input type="checkbox" :checked="isSelected(selKey(row))" @change="toggleFile(row)" />
+                <span class="file-path" :title="row.path">{{ row.path }}</span>
+                <span class="file-size">{{ row.size_mb }} MB</span>
+                <span class="badge" :class="KIND_RISKS[row.kind] === 'high' ? 'badge-danger' : 'badge-warning'">
+                  {{ KIND_LABELS[row.kind] }}
+                </span>
+              </label>
+            </div>
+          </div>
+
+          <!-- journald -->
+          <div v-if="scanResult.journal && scanResult.journal.disk_used" class="residue-row">
+            <label class="residue-label">
+              <input type="checkbox" :checked="isSelected('journal')" @change="toggleJournal" />
+              journald 占用 <code>{{ scanResult.journal.disk_used }}</code>
+              <span class="residue-desc">→ 压缩为</span>
+              <input v-model.number="journalSize" type="number" min="1" max="10000" class="journal-size" />
+              <span class="residue-desc">MB</span>
+              <span class="badge badge-warning">低危</span>
+            </label>
+          </div>
+
+          <!-- Docker 残留 -->
+          <div v-if="dockerResidue.dangling || dockerResidue.stopped" class="residue-row">
+            <label class="residue-label">
+              <input type="checkbox" :checked="isSelected('prune')" @change="togglePrune" />
+              Docker 残留：dangling 镜像 {{ dockerResidue.dangling }} 个
+              <template v-if="dockerResidue.stopped"> / 停止容器 {{ dockerResidue.stopped }} 个</template>
+              <span class="residue-desc">→ docker-prune 整批回收</span>
+              <span class="badge badge-danger">高风险 · 强制人工审批</span>
+            </label>
+          </div>
+        </div>
       </div>
 
       <!-- AI 策略 -->
@@ -1061,4 +1146,29 @@ textarea.form-input {
   font-size: 12px;
   line-height: 1.5;
 }
+
+/* 日志清理向导 */
+.wizard-result { margin-top: 12px; border: 1px solid var(--color-border-light); border-radius: var(--radius-sm); overflow: hidden; }
+.wizard-body { padding: 14px; display: flex; flex-direction: column; gap: 14px; }
+.disk-cards { display: flex; gap: 10px; flex-wrap: wrap; }
+.disk-card { flex: 1; min-width: 160px; border-radius: var(--radius-sm); padding: 12px; display: flex; flex-direction: column; gap: 2px; }
+.disk-danger { background: rgba(239, 68, 68, 0.10); border: 1px solid rgba(239, 68, 68, 0.35); }
+.disk-warning { background: rgba(245, 158, 11, 0.10); border: 1px solid rgba(245, 158, 11, 0.35); }
+.disk-success { background: rgba(16, 185, 129, 0.10); border: 1px solid rgba(16, 185, 129, 0.35); }
+.disk-mount { font-weight: 600; font-size: 13px; }
+.disk-pct { font-size: 22px; font-weight: 700; }
+.disk-detail { font-size: 12px; color: var(--color-text-secondary); }
+.file-section { display: flex; flex-direction: column; gap: 8px; }
+.file-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+.file-tab { padding: 4px 10px; border: 1px solid var(--color-border-light); border-radius: var(--radius-sm); font-size: 12px; background: transparent; cursor: pointer; color: var(--color-text-secondary); }
+.file-tab.active { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
+.file-list { display: flex; flex-direction: column; max-height: 260px; overflow-y: auto; border: 1px solid var(--color-border-light); border-radius: var(--radius-sm); }
+.file-row { display: flex; align-items: center; gap: 8px; padding: 6px 10px; font-size: 13px; }
+.file-row + .file-row { border-top: 1px solid var(--color-border-light); }
+.file-path { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: 'SF Mono', Menlo, monospace; font-size: 12px; }
+.file-size { color: var(--color-text-secondary); font-size: 12px; white-space: nowrap; }
+.residue-row { display: flex; align-items: center; gap: 8px; font-size: 13px; flex-wrap: wrap; }
+.residue-label { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.residue-desc { color: var(--color-text-secondary); font-size: 12px; }
+.journal-size { width: 70px; padding: 4px 6px; border: 1px solid var(--color-border-light); border-radius: var(--radius-sm); font-size: 12px; }
 </style>
