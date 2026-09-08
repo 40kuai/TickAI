@@ -52,6 +52,10 @@ PEAK_HOURS: List[Tuple[int, int]] = _parse_hours(
 # 日志清理固定脚本类别白名单（通道一；默认空=安全兜底）
 LOG_CLEANUP_CATEGORIES: List[str] = _split_csv("SELFHEAL_LOG_CLEANUP_CATEGORIES_WHITELIST")
 
+# 统一审批出口: 同类操作冷却期(小时)。冷却期内同 server+scene+action 已执行过
+# (executed/verified) 则不再生成审批单, 防自动探测周期性触发造成审批疲劳。
+COOLDOWN_HOURS = int(settings.get("SELFHEAL_COOLDOWN_HOURS", "6") or 6)
+
 # 清理脚本内部阈值（MB/天）
 JOURNAL_VACUUM_SIZE_MB = 200
 SERVICE_LOG_MAX_MB = 100
@@ -65,9 +69,10 @@ DOCKER_LOG_TRUNCATE_PREFIX = "/var/lib/docker/containers/"
 def reload_config() -> None:
     """重新读取配置（环境变量 > .env > 默认，供测试/运行时配置变更）。"""
     global SERVICE_WHITELIST, LOG_PATH_WHITELIST, DROPCACHES_MODES_WHITELIST, PEAK_HOURS
-    global LOG_CLEANUP_CATEGORIES
+    global LOG_CLEANUP_CATEGORIES, COOLDOWN_HOURS
     SERVICE_WHITELIST = _split_csv("SELFHEAL_SERVICE_WHITELIST")
     LOG_PATH_WHITELIST = _split_csv("SELFHEAL_LOG_PATH_WHITELIST")
     DROPCACHES_MODES_WHITELIST = _split_csv("SELFHEAL_DROPCACHES_MODES_WHITELIST")
     PEAK_HOURS = _parse_hours(settings.get("SELFHEAL_PEAK_HOURS", "9-18"))
     LOG_CLEANUP_CATEGORIES = _split_csv("SELFHEAL_LOG_CLEANUP_CATEGORIES_WHITELIST")
+    COOLDOWN_HOURS = int(settings.get("SELFHEAL_COOLDOWN_HOURS", "6") or 6)
