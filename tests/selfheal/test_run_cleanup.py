@@ -54,3 +54,29 @@ class RunCleanupTests(unittest.TestCase):
             run_cleanup.build_cleanup_command("a;rm -rf /")
         # 合法白名单成员仍可用
         self.assertIn("bash -s -- good", run_cleanup.build_cleanup_command("good"))
+
+
+class DryRunTests(unittest.TestCase):
+    def test_build_dry_run_command_appends_dry(self):
+        cmd = run_cleanup.build_dry_run_command("system")
+        self.assertTrue(cmd.endswith(" bash -s -- system dry"))
+
+    def test_build_dry_run_command_validates_category(self):
+        with self.assertRaises(ValueError):
+            run_cleanup.build_dry_run_command("; rm -rf /")
+
+    def test_parse_dry_run_counts_files(self):
+        out = (
+            "[cleanup][2026-09-08 10:00:00] system: remove /var/log/a.gz\n"
+            "[cleanup][2026-09-08 10:00:01] system: remove /var/log/b.1\n"
+            "[cleanup][2026-09-08 10:00:02] service: truncate /data/app/logs/x.log\n"
+            "[cleanup][2026-09-08 10:00:03] done: system\n"
+        )
+        impact = run_cleanup.parse_dry_run_output(out)
+        self.assertEqual(impact["files"], 3)
+        self.assertIn("/data/app/logs/x.log", impact["paths"])
+
+    def test_parse_dry_run_empty(self):
+        impact = run_cleanup.parse_dry_run_output("")
+        self.assertEqual(impact["files"], 0)
+        self.assertEqual(impact["paths"], [])

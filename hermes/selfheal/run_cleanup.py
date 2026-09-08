@@ -53,3 +53,28 @@ def build_cleanup_command(category: str | None) -> str:
     )
     return f"{env_prefix} bash -s -- {category}"
 
+
+# 脚本 dry 模式输出行: "[cleanup][ts] <category>: remove|truncate <path>"
+_REMOVE_LINE_RE = re.compile(
+    r"\b(?:system|service|docker-log):\s+(?:remove|truncate)\s+(\S+)"
+)
+
+
+def build_dry_run_command(category: str | None) -> str:
+    """构建 dry-run 命令: <阈值env> bash -s -- <category> dry。
+
+    复用 build_cleanup_command 的类别/白名单校验(非法类别抛 ValueError),
+    仅追加第二个位置参数 dry —— 脚本 dry 模式只打印将处理文件, 不执行写操作。
+    """
+    return f"{build_cleanup_command(category)} dry"
+
+
+def parse_dry_run_output(stdout: str) -> dict[str, object]:
+    """统计 dry-run 输出: {files: 将处理文件数, paths: 路径列表(上限 50)}。"""
+    paths = []
+    for m in _REMOVE_LINE_RE.finditer(stdout or ""):
+        paths.append(m.group(1))
+        if len(paths) >= 50:
+            break
+    return {"files": len(paths), "paths": paths}
+
