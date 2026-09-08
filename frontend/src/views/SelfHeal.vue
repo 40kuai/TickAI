@@ -286,6 +286,18 @@ const aiPlanError = ref('')
 const aiPlanResult = ref(null)
 const strategyJson = ref('')
 
+// ====== 日志清理: 折叠面板与说明 ======
+const showQuickCleanup = ref(false) // 快捷清理(原固定脚本)
+const showAdvanced = ref(false)     // 高级模式(手写 JSON)
+// 清理类别说明
+const CLEANUP_CATEGORY_DESC = {
+  system: '系统日志(/var/log 下按策略清理)',
+  service: '服务日志(/data/*/logs 下按策略清理)',
+  'docker-log': 'Docker 容器 json.log 截断',
+  'docker-prune': '回收停止容器与 dangling 镜像（高风险，强制人工审批）',
+  all: '整批执行以上全部类别',
+}
+
 // ====== 日志清理向导: 勾选状态 + 策略生成 ======
 // 勾选状态: Map<selectionKey, {type, params, label, risk}>
 // selectionKey 唯一标识可勾选项: file:<kind>:<path> | journal | prune
@@ -636,25 +648,10 @@ onMounted(loadAll)
             </option>
           </select>
         </div>
-        <div class="form-group">
-          <label class="form-label">清理类别</label>
-          <select v-model="cleanupForm.category" class="form-select">
-            <option v-for="c in CLEANUP_CATEGORIES" :key="c.value" :value="c.value">
-              {{ c.label }}
-            </option>
-          </select>
-        </div>
       </div>
-      <div v-if="cleanupError" class="error-tip">{{ cleanupError }}</div>
       <div class="form-actions">
-        <button class="btn btn-primary" :disabled="cleanupRunning" @click="handleCleanup">
-          {{ cleanupRunning ? '触发中…' : '▶ 触发固定清理(按风险审批)' }}
-        </button>
         <button class="btn btn-outline" :disabled="scanRunning" @click="handleScan">
           {{ scanRunning ? '扫描中…' : '🔍 只读扫描' }}
-        </button>
-        <button class="btn btn-outline" :disabled="scanRunning || !scanResult" @click="fillStrategyExample">
-          填充策略示例
         </button>
       </div>
 
@@ -780,24 +777,67 @@ onMounted(loadAll)
         </div>
       </div>
 
-      <!-- AI 策略 -->
-      <div class="form-group" style="margin-top: 12px">
-        <label class="form-label">AI 清理策略（JSON，每项映射到白名单模板）</label>
-        <textarea v-model="strategyJson" class="form-input" rows="5"
-          placeholder='{"mount": "/", "items": [{"type": "journal_vacuum", "size": "200"}]}'></textarea>
-      </div>
-      <div v-if="aiPlanError" class="error-tip">{{ aiPlanError }}</div>
-      <div class="form-actions">
-        <button class="btn btn-primary" :disabled="aiPlanRunning" @click="handleAiPlan">
-          {{ aiPlanRunning ? '提交中…' : '提交 AI 策略(按风险审批)' }}
+      <!-- 快捷清理 / 高级模式 折叠开关 -->
+      <div class="collapse-row">
+        <button class="btn btn-outline btn-sm" @click="showQuickCleanup = !showQuickCleanup">
+          {{ showQuickCleanup ? '▾ 收起' : '⚡ 快捷清理（整批，按风险审批）' }}
+        </button>
+        <button class="btn btn-outline btn-sm" @click="showAdvanced = !showAdvanced">
+          {{ showAdvanced ? '▾ 收起' : '🔧 高级模式（手写策略 JSON）' }}
         </button>
       </div>
-      <div v-if="aiPlanResult" class="result-box">
-        <div class="result-head">
-          <span class="result-title">AI 策略结果</span>
-          <button class="result-close" @click="aiPlanResult = null">×</button>
+
+      <!-- 快捷清理(原固定脚本) -->
+      <div v-if="showQuickCleanup" class="collapse-panel">
+        <div class="form-grid">
+          <div class="form-group">
+            <label class="form-label">清理类别</label>
+            <select v-model="cleanupForm.category" class="form-select">
+              <option v-for="c in CLEANUP_CATEGORIES" :key="c.value" :value="c.value">
+                {{ c.label }}
+              </option>
+            </select>
+          </div>
         </div>
-        <pre class="result-pre">{{ JSON.stringify(aiPlanResult, null, 2) }}</pre>
+        <p class="category-desc">{{ CLEANUP_CATEGORY_DESC[cleanupForm.category] || '' }}</p>
+        <div v-if="cleanupError" class="error-tip">{{ cleanupError }}</div>
+        <div class="form-actions">
+          <button class="btn btn-primary" :disabled="cleanupRunning" @click="handleCleanup">
+            {{ cleanupRunning ? '触发中…' : '▶ 触发整批清理（按风险审批）' }}
+          </button>
+        </div>
+        <div v-if="cleanupResult" class="result-box">
+          <div class="result-head">
+            <span class="result-title">快捷清理结果</span>
+            <button class="result-close" @click="cleanupResult = null">×</button>
+          </div>
+          <pre class="result-pre">{{ JSON.stringify(cleanupResult, null, 2) }}</pre>
+        </div>
+      </div>
+
+      <!-- 高级模式(手写 JSON) -->
+      <div v-if="showAdvanced" class="collapse-panel">
+        <div class="form-group">
+          <label class="form-label">AI 清理策略（JSON，每项映射到白名单模板）</label>
+          <textarea v-model="strategyJson" class="form-input" rows="5"
+            placeholder='{"mount": "/", "items": [{"type": "journal_vacuum", "size": "200"}]}'></textarea>
+        </div>
+        <div class="form-actions">
+          <button class="btn btn-outline" :disabled="scanRunning || !scanResult" @click="fillStrategyExample">
+            填充策略示例
+          </button>
+          <button class="btn btn-primary" :disabled="aiPlanRunning" @click="handleAiPlan">
+            {{ aiPlanRunning ? '提交中…' : '提交策略（按风险审批）' }}
+          </button>
+        </div>
+        <div v-if="aiPlanError" class="error-tip">{{ aiPlanError }}</div>
+        <div v-if="aiPlanResult" class="result-box">
+          <div class="result-head">
+            <span class="result-title">AI 策略结果</span>
+            <button class="result-close" @click="aiPlanResult = null">×</button>
+          </div>
+          <pre class="result-pre">{{ JSON.stringify(aiPlanResult, null, 2) }}</pre>
+        </div>
       </div>
     </div>
 
@@ -1294,4 +1334,8 @@ textarea.form-input {
 .submit-stat.danger { color: var(--color-danger); }
 .rejected-panel { border: 1px solid rgba(239, 68, 68, 0.35); border-radius: var(--radius-sm); padding: 10px; display: flex; flex-direction: column; gap: 6px; }
 .rejected-row { font-size: 12px; word-break: break-all; }
+/* 快捷清理 / 高级模式 折叠面板 */
+.collapse-row { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+.collapse-panel { border: 1px dashed var(--color-border-light); border-radius: var(--radius-sm); padding: 12px; margin-bottom: 12px; }
+.category-desc { margin: 8px 0 0; font-size: 12px; color: var(--color-text-secondary); }
 </style>
