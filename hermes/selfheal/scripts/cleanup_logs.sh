@@ -23,7 +23,8 @@ clean_system() {
   find /var/log -maxdepth 2 -type f \
     \( -name '*.gz' -o -name '*.1' -o -name '*.old' \) \
     -mtime +${SERVICE_LOG_MAX_DAYS} 2>/dev/null | while read -r f; do
-    log "system: remove $f"
+    sz=$(stat -c %s "$f" 2>/dev/null || echo 0)
+    log "system: remove $f $sz"
     [ -z "$DRY" ] && rm -f "$f" || true
   done || true
 }
@@ -34,7 +35,8 @@ clean_service() {
   find /data -maxdepth 3 -type d -name logs 2>/dev/null | while read -r d; do
     find "$d" -maxdepth 1 -type f \( -name '*.log' -o -name '*.log.*' \) \
       -size +${SERVICE_LOG_MAX_MB}M -mtime +${SERVICE_LOG_MAX_DAYS} 2>/dev/null | while read -r f; do
-      log "service: truncate $f"
+      sz=$(stat -c %s "$f" 2>/dev/null || echo 0)
+      log "service: truncate $f $sz"
       [ -z "$DRY" ] && : > "$f" || true
     done || true
   done || true
@@ -54,7 +56,11 @@ clean_docker_log() {
 clean_docker_prune() {
   log "docker-prune: prune stopped containers + dangling images"
   command -v docker >/dev/null 2>&1 || { log "docker-prune: docker 不存在, 跳过"; return 0; }
-  if [ -z "$DRY" ]; then
+  if [ -n "$DRY" ]; then
+    # dry 模式: 输出计划执行的命令(文件数/体积不可预估), 供影响面采集识别"有动作但不可测"
+    log "docker-prune: would run: docker container prune -f"
+    log "docker-prune: would run: docker image prune -f"
+  else
     docker container prune -f >/dev/null 2>&1 || true
     docker image prune -f >/dev/null 2>&1 || true
   fi

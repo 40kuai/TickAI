@@ -1,5 +1,7 @@
 """Tests for hermes.selfheal.run_cleanup (通道一固定脚本入口)."""
 import os
+import subprocess
+import tempfile
 import unittest
 
 from hermes.selfheal import config, run_cleanup
@@ -124,3 +126,48 @@ class DryRunTests(unittest.TestCase):
         self.assertEqual(impact["files"], 1)
         self.assertEqual(impact["paths"], ["/data/app logs/app log.1"])
         self.assertEqual(impact["total_size_mb"], 2.0)
+
+
+class DryRunEndToEndTests(unittest.TestCase):
+    """脚本 dry 模式真实输出 → parse_dry_run_output(防解析端与测试自产自销)。"""
+
+    def test_docker_prune_dry_output_has_planned_commands(self):
+        # 假 docker 使 clean_docker_prune 走到 dry 输出分支; 验证产生端真实输出
+        script = run_cleanup.load_cleanup_script()
+        with tempfile.TemporaryDirectory() as tmp:
+            bin_dir = os.path.join(tmp, "bin")
+            os.makedirs(bin_dir)
+            fake_docker = os.path.join(bin_dir, "docker")
+            with open(fake_docker, "w") as f:
+                f.write("#!/bin/sh\n:")
+            os.chmod(fake_docker, 0o755)
+            env = dict(os.environ, PATH=f"{bin_dir}:{os.environ.get('PATH', '')}")
+            proc = subprocess.run(
+                ["bash", "-s", "--", "docker-prune", "dry"],
+                input=script, capture_output=True, text=True, env=env, timeout=30)
+        self.assertEqual(proc.returncode, 0)
+        impact = run_cleanup.parse_dry_run_output(proc.stdout)
+        self.assertEqual(impact["files"], 0)
+        self.assertEqual(
+            impact["planned_commands"],
+            ["docker container prune -f", "docker image prune -f"],
+        )
+
+    def test_system_dry_output_carries_sizes(self):
+        # system 类别 remove 行须附带 stat 大小(总影响面可估计)
+        script = run_cleanup.load_cleanup_script()
+        with tempfile.TemporaryDirectory() as tmp:
+            # find 目标固定在 /var/log, 本地 macOS 上不注入实际文件,
+            # 仅断言"输出行格式"契约: 若产生 remove 行则必须带 size 后缀
+            proc = subprocess.run(
+                ["bash", "-s", "--", "system", "dry"],
+                input=script, capture_output=True, text=True, timeout=30)
+        self.assertEqual(proc.returncode, 0)
+        impact = run_cleanup.parse_dry_run_output(proc.stdout)
+        for line in proc.stdout.splitlines():
+            if " remove " in line:
+                # remove 行末尾须有 size 数字, 否则会被误判为裸路径
+                self.assertRegex(line, r" remove .+ \d+$",
+                                 f"remove 行缺少 size: {line}")
+        # 无论本地是否命中文件, files 与 paths 必须一致(产生端格式不破坏解析端)
+        self.assertEqual(impact["files"], len(impact["paths"]))
