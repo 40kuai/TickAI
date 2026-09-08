@@ -287,10 +287,10 @@ const aiPlanResult = ref(null)
 const strategyJson = ref('')
 
 // ====== 日志清理向导: 勾选状态 + 策略生成 ======
-// 勾选状态: Map<selectionKey, {type, params, label, size_mb, risk}>
+// 勾选状态: Map<selectionKey, {type, params, label, risk}>
 // selectionKey 唯一标识可勾选项: file:<kind>:<path> | journal | prune
 const selected = ref(new Map())
-// journal 压缩大小(MB), 勾选后生效
+// journal 压缩大小(MB); 生成策略时以输入框当前值为准(wizardStrategy 动态读取)
 const journalSize = ref(200)
 // 清理向导提交状态
 const wizardRunning = ref(false)
@@ -332,8 +332,7 @@ function toggleFile(row) {
       type: row.kind,
       params: { path: row.path },
       label: row.path,
-      size_mb: row.size_mb,
-      risk: KIND_RISKS[row.kind] || 'low',
+      risk: KIND_RISKS[row.kind] || 'high',
     })
   }
   selected.value = new Map(selected.value) // 触发响应式
@@ -375,10 +374,13 @@ function removeSelected(key) {
 // 已选汇总数组(模板渲染)
 const selectedList = computed(() => Array.from(selected.value.entries()))
 
-// 策略 JSON 预览(实时生成, 只读)
+// 策略 JSON 预览(实时生成, 只读; journal size 动态取输入框当前值)
 const wizardStrategy = computed(() => ({
   mount: '/',
-  items: Array.from(selected.value.values()).map((s) => ({ type: s.type, ...s.params })),
+  items: Array.from(selected.value.values()).map((s) => {
+    const params = s.type === 'journal_vacuum' ? { ...s.params, size: journalSize.value } : s.params
+    return { type: s.type, ...params }
+  }),
 }))
 
 // 向导可提交条件: 已选服务器 且 至少勾选一项
