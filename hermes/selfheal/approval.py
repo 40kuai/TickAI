@@ -138,7 +138,7 @@ def _parse_judgement(content: str) -> Dict[str, Any]:
         raise ValueError(f"非法 risk_score: {raw!r}")
     try:
         f = float(raw)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(f"非法 risk_score: {raw!r}") from exc
     if not f.is_integer() or not 1 <= f <= 5:
         raise ValueError(f"risk_score 越界: {raw!r}")
@@ -189,7 +189,7 @@ def _coerce_score(value: Any) -> int:
         return 5
     try:
         f = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 5
     if not f.is_integer() or not 1 <= f <= 5:
         return 5
