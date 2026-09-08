@@ -24,6 +24,7 @@ const runResult = ref(null)
 const approvingId = ref(null)
 const actionError = ref('')
 const detailItem = ref(null) // 查看详情弹窗当前项
+const confirmBox = ref(null) // 审批/驳回确认弹窗 { type: 'approve'|'reject', item }
 
 // ====== 标签 / 徽章映射 ======
 const SCENE_LABELS = {
@@ -195,9 +196,21 @@ async function handleRun() {
 }
 
 // ====== 审批 / 驳回 ======
-async function handleApprove(item) {
+// 自定义确认弹窗替代原生 confirm：浏览器可能拦截对话框使 confirm() 返回 false，
+// 导致点击批准/驳回毫无响应（请求不发出），因此改为页面内弹窗确认。
+function askApprove(item) {
+  confirmBox.value = { type: 'approve', item }
+}
+function askReject(item) {
+  confirmBox.value = { type: 'reject', item }
+}
+function closeConfirm() {
   if (approvingId.value !== null) return
-  if (!confirm(`确认批准自愈动作 #${item.id}（${actionLabel(item.action_name)}）？`)) return
+  confirmBox.value = null
+}
+
+async function doApprove(item) {
+  if (approvingId.value !== null) return
   approvingId.value = item.id
   actionError.value = ''
   try {
@@ -206,13 +219,13 @@ async function handleApprove(item) {
     actionError.value = err.response?.data?.detail || '批准失败'
   } finally {
     approvingId.value = null
+    confirmBox.value = null
     await refreshActionsAndStats()
   }
 }
 
-async function handleReject(item) {
+async function doReject(item) {
   if (approvingId.value !== null) return
-  if (!confirm(`确认驳回自愈动作 #${item.id}？`)) return
   approvingId.value = item.id
   actionError.value = ''
   try {
@@ -221,6 +234,7 @@ async function handleReject(item) {
     actionError.value = err.response?.data?.detail || '驳回失败'
   } finally {
     approvingId.value = null
+    confirmBox.value = null
     await refreshActionsAndStats()
   }
 }
@@ -541,14 +555,14 @@ onMounted(loadAll)
                     <button
                       class="btn btn-primary btn-sm"
                       :disabled="approvingId !== null"
-                      @click="handleApprove(a)"
+                      @click="askApprove(a)"
                     >
                       {{ approvingId === a.id ? '处理中…' : '批准' }}
                     </button>
                     <button
                       class="btn btn-danger btn-sm"
                       :disabled="approvingId !== null"
-                      @click="handleReject(a)"
+                      @click="askReject(a)"
                     >
                       拒绝
                     </button>
@@ -627,6 +641,44 @@ onMounted(loadAll)
           <div v-if="detailItem.plan_id" class="detail-block">
             <span class="detail-label">AI 策略批次</span>
             <pre class="detail-pre">{{ detailItem.plan_id }}</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- 审批/驳回确认弹窗(替代原生 confirm,避免浏览器拦截对话框导致无响应) -->
+    <div v-if="confirmBox" class="modal-mask" @click.self="closeConfirm">
+      <div class="modal-panel confirm-panel">
+        <div class="modal-head">
+          <h3>{{ confirmBox.type === 'approve' ? '批准' : '驳回' }}自愈动作 #{{ confirmBox.item.id }}</h3>
+          <button class="btn btn-secondary btn-sm" @click="closeConfirm">关闭</button>
+        </div>
+        <div class="modal-body">
+          <p class="confirm-text">
+            确认{{ confirmBox.type === 'approve' ? '批准' : '驳回' }}自愈动作
+            <strong>#{{ confirmBox.item.id }}</strong>（{{ actionLabel(confirmBox.item.action_name) }}）？
+          </p>
+          <div v-if="confirmBox.type === 'approve'" class="detail-block">
+            <span class="detail-label">将执行命令</span>
+            <pre class="detail-pre">{{ confirmBox.item.rendered_command || '-' }}</pre>
+          </div>
+          <div class="confirm-actions">
+            <button class="btn btn-outline" :disabled="approvingId !== null" @click="closeConfirm">取消</button>
+            <button
+              v-if="confirmBox.type === 'approve'"
+              class="btn btn-primary"
+              :disabled="approvingId !== null"
+              @click="doApprove(confirmBox.item)"
+            >
+              {{ approvingId === confirmBox.item.id ? '执行中…' : '确认批准' }}
+            </button>
+            <button
+              v-else
+              class="btn btn-danger"
+              :disabled="approvingId !== null"
+              @click="doReject(confirmBox.item)"
+            >
+              {{ approvingId === confirmBox.item.id ? '处理中…' : '确认驳回' }}
+            </button>
           </div>
         </div>
       </div>
@@ -774,6 +826,22 @@ onMounted(loadAll)
   word-break: break-all;
   max-height: 220px;
   overflow-y: auto;
+}
+
+/* 审批/驳回确认弹窗 */
+.confirm-panel {
+  width: min(520px, 100%);
+}
+.confirm-text {
+  margin: 0 0 14px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 16px;
 }
 
 /* 统计卡片（与 Dashboard 风格一致） */

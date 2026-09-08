@@ -2,6 +2,7 @@
 import { ref, reactive, computed, onMounted, nextTick, watch } from 'vue'
 import { marked } from 'marked'
 import api from '@/api'
+import ConfirmDialog from '@/components/ConfirmDialog.vue'
 
 // 配置 Markdown 渲染
 marked.setOptions({ breaks: true, gfm: true })
@@ -126,16 +127,23 @@ function newConversation() {
   errorMsg.value = ''
 }
 
-// 删除对话
-async function deleteConversation(id, e) {
+// 删除对话（自定义确认弹窗替代原生 confirm，避免浏览器拦截导致无响应）
+const delId = ref(null)
+function askDeleteConversation(id, e) {
   e.stopPropagation()
-  if (!confirm('确定删除该对话吗？')) return
+  delId.value = id
+}
+async function doDeleteConversation() {
+  if (delId.value === null) return
+  const id = delId.value
   try {
     await api.delete(`/chat/conversations/${id}`)
+    delId.value = null
     if (currentId.value === id) newConversation()
     await loadConversations()
   } catch (err) {
     alert(err.response?.data?.detail || '删除失败')
+    delId.value = null
   }
 }
 
@@ -360,7 +368,7 @@ onMounted(loadConversations)
             <div class="conv-item-meta">{{ formatTime(c.updated_at) }}</div>
           </div>
           <div class="conv-item-side">
-            <button class="del-btn" title="删除" @click="deleteConversation(c.id, $event)">×</button>
+            <button class="del-btn" title="删除" @click="askDeleteConversation(c.id, $event)">×</button>
           </div>
         </a>
       </div>
@@ -448,6 +456,17 @@ onMounted(loadConversations)
         </button>
       </div>
     </section>
+
+    <!-- 删除对话确认弹窗 -->
+    <ConfirmDialog
+      :show="delId !== null"
+      title="删除对话"
+      :message="delId !== null ? '确定删除该对话吗？此操作不可恢复。' : ''"
+      confirm-text="删除"
+      danger
+      @confirm="doDeleteConversation"
+      @cancel="delId = null"
+    />
   </div>
 </template>
 
