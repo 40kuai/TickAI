@@ -57,6 +57,8 @@ class _SelfHealApiTestCase(unittest.TestCase):
 
     def setUp(self):
         db.init_db()
+        # 强制重置自愈白名单, 防御上游测试(tests/selfheal tearDown pop)污染本文件用例
+        os.environ["SELFHEAL_LOG_PATH_WHITELIST"] = "/var/log/nginx/access.log"
         config.reload_config()
         with db.session_scope() as s:
             s.query(models.SelfHealAction).delete()
@@ -120,7 +122,10 @@ class RunEndpointTests(_SelfHealApiTestCase):
 
     def test_run_high_risk_disk_clean_pending(self):
         # 探测 stdout 96% ≥ 高危阈值 90 → 落审批单 pending,不执行写命令
-        with patch("hermes.selfheal.actions.exec_ssh", return_value={
+        import hermes.selfheal.approval as approval_mod
+        with patch.object(approval_mod, "_default_judge",
+                          side_effect=RuntimeError("no TOKENHUB_API_KEY in test")), \
+                patch("hermes.selfheal.actions.exec_ssh", return_value={
                 "success": True, "exit_code": 0, "stdout": DISK_PROBE_HIGH,
                 "stderr": ""}):
             r = self.client.post("/api/selfheal/run", json={
@@ -329,12 +334,16 @@ class ScanLogEndpointTests(_SelfHealApiTestCase):
 
 class AiPlanEndpointTests(_SelfHealApiTestCase):
     def test_ai_plan_endpoint_generates_pending(self):
+        # create_plan 已接入统一出口: AI 判定不可用(fail-closed) → approval 挂单, 不执行
+        import hermes.selfheal.approval as approval_mod
         strategy = {"mount": "/", "items": [
             {"type": "journal_vacuum", "size": "200"},
             {"type": "truncate_file", "path": "/etc/passwd"},
         ]}
-        r = self.client.post("/api/selfheal/ai-plan",
-                             json={"server_id": self.server_id, "strategy": strategy})
+        with patch.object(approval_mod, "_default_judge",
+                          side_effect=RuntimeError("no TOKENHUB_API_KEY in test")):
+            r = self.client.post("/api/selfheal/ai-plan",
+                                 json={"server_id": self.server_id, "strategy": strategy})
         self.assertEqual(r.status_code, 200)
         data = r.json()
         self.assertEqual(data["accepted"], 1)
@@ -349,12 +358,16 @@ class AiPlanEndpointTests(_SelfHealApiTestCase):
 class PlanIdFilterTests(_SelfHealApiTestCase):
     def test_actions_filter_by_plan_id(self):
         from hermes.selfheal import ai_cleanup
+        import hermes.selfheal.approval as approval_mod
         strategy = {"mount": "/", "items": [
             {"type": "journal_vacuum", "size": "200"},
         ]}
         # 归入不同 plan_id 的干扰动作: 若无 plan_id 过滤, 会被一并返回
-        ai_cleanup.create_plan(self.server_id, strategy, plan_id="plan-x")
-        ai_cleanup.create_plan(self.server_id, strategy, plan_id="plan-y")
+        # AI 判定不可用(fail-closed) → approval 挂单, 不执行(防触网与真实 SSH)
+        with patch.object(approval_mod, "_default_judge",
+                          side_effect=RuntimeError("no TOKENHUB_API_KEY in test")):
+            ai_cleanup.create_plan(self.server_id, strategy, plan_id="plan-x")
+            ai_cleanup.create_plan(self.server_id, strategy, plan_id="plan-y")
         r = self.client.get("/api/selfheal/actions?plan_id=plan-x")
         self.assertEqual(r.status_code, 200)
         rows = r.json()

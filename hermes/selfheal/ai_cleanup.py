@@ -1,9 +1,10 @@
-"""AI 清理策略校验与审批单生成(通道二).
+"""AI 清理策略校验与执行决策(通道二).
 
 AI 只读扫描(scan_log_cleanup)后由 LLM 产出清理策略 JSON, 本模块:
 - 逐项映射到 actions 模板白名单(校验失败拒绝并记录原因, 绝不静默放行)
-- 合法项生成 SelfHealAction(status=pending, triggered_by=ai, plan_id 归组)
-- AI 绝不直接执行写操作; 全部审批单待人工 approve 后经 execute_and_verify 执行。
+- 合法项统一经 approval.decide 三态决策: reject 拒绝 / approval 挂审批单
+  (plan_id 归组, 人工 approve 后经 execute_and_verify 执行) / auto 直接执行+验证。
+- AI 绝不绕过统一审批出口直接执行写操作。
 """
 from __future__ import annotations
 
@@ -14,7 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from hermes.data import db
 from hermes.data.models import SelfHealAction
 
-from . import actions
+from . import actions, approval, orchestrator
 
 # AI 策略项类型 → action_name(映射到 actions 模板白名单)
 _TYPE_ACTIONS = {
@@ -74,16 +75,17 @@ def create_plan(server_id: int, strategy: Dict[str, Any],
 
     # mount 严格白名单校验(仅安全绝对路径), 防探测命令注入
     if not _MOUNT_RE.match(mount):
-        return {"plan_id": plan_id, "accepted": 0, "rejected": 1,
+        return {"plan_id": plan_id, "accepted": 0, "rejected": 1, "auto": 0,
                 "items": [{"ok": False, "reason": f"mount 非法: {mount!r}"}]}
 
     items = (strategy or {}).get("items", [])
     if not isinstance(items, list):
-        return {"plan_id": plan_id, "accepted": 0, "rejected": 1,
+        return {"plan_id": plan_id, "accepted": 0, "rejected": 1, "auto": 0,
                 "items": [{"ok": False, "reason": "items 必须是数组"}]}
 
     accepted = 0
     rejected = 0
+    auto = 0
     out_items: List[Dict[str, Any]] = []
     for item in items:
         ok, detail, reason = _validate_item(item, mount)
@@ -91,17 +93,47 @@ def create_plan(server_id: int, strategy: Dict[str, Any],
             rejected += 1
             out_items.append({"ok": False, "reason": reason})
             continue
-        # 生成 pending 审批单
-        _persist_pending(server_id, plan_id, detail)
+        # 影响面: AI 策略项为单目标(文件/日志), size_mb 取策略估量(非法则该项拒绝)
+        try:
+            size_mb = float(item.get("size_mb")) if item.get("size_mb") is not None else None
+        except (TypeError, ValueError):
+            rejected += 1
+            out_items.append({"ok": False,
+                              "reason": f"非法 size_mb: {item.get('size_mb')!r}"})
+            continue
+        impact = {"files": 1, "size_mb": size_mb}
+        # 统一审批出口: 操作影响风险 → reject 拒绝 / approval 挂单 / auto 直接执行
+        d = approval.decide(
+            server_id, detail["action"], detail["target"],
+            {"scene": "ai_log_cleanup", "triggered_by": "ai",
+             "impact": impact, "metric": None},
+        )
+        if d["decision"] == "reject":
+            rejected += 1
+            out_items.append({"ok": False,
+                              "reason": "审批出口拒绝: " + "; ".join(d["reasons"])})
+            continue
+        if d["decision"] == "approval":
+            _persist_pending(server_id, plan_id, detail, reasons=d["reasons"])
+            accepted += 1
+            out_items.append({"ok": True, "action": detail["action"],
+                              "target": detail["target"], "status": "pending"})
+            continue
+        # auto: 统一出口放行 → 直接执行 + 验证
+        record = _persist_and_execute_auto(server_id, plan_id, detail, d["reasons"])
+        record = orchestrator.execute_and_verify(record, detail["target"],
+                                                 record.rendered_command)
+        auto += 1
         accepted += 1
         out_items.append({"ok": True, "action": detail["action"],
-                          "target": detail["target"]})
+                          "target": detail["target"], "status": record.status})
 
     return {"plan_id": plan_id, "accepted": accepted,
-            "rejected": rejected, "items": out_items}
+            "rejected": rejected, "auto": auto, "items": out_items}
 
 
-def _persist_pending(server_id: int, plan_id: str, detail: Dict[str, Any]) -> None:
+def _persist_pending(server_id: int, plan_id: str, detail: Dict[str, Any],
+                     reasons: Optional[List[str]] = None) -> None:
     with db.session_scope() as s:
         row = SelfHealAction(
             server_id=server_id,
@@ -112,6 +144,26 @@ def _persist_pending(server_id: int, plan_id: str, detail: Dict[str, Any]) -> No
             status="pending",
             triggered_by="ai",
             plan_id=plan_id,
-            grade_reasons=json.dumps(detail["reasons"], ensure_ascii=False),
+            grade_reasons=json.dumps(reasons or detail["reasons"], ensure_ascii=False),
         )
         s.add(row)
+        s.flush()
+        return row
+
+
+def _persist_and_execute_auto(server_id: int, plan_id: str,
+                              detail: Dict[str, Any], reasons: List[str]) -> Any:
+    """auto 决策项: 落库 executing → execute_and_verify(统一出口放行后直接执行)。"""
+    command = actions.render_command(detail["action"], detail["target"])
+    with db.session_scope() as s:
+        row = SelfHealAction(
+            server_id=server_id, scene="ai_log_cleanup",
+            target=json.dumps(detail["target"], ensure_ascii=False),
+            severity="low", action_name=detail["action"],
+            status="executing", triggered_by="ai", plan_id=plan_id,
+            rendered_command=command,
+            grade_reasons=json.dumps(reasons, ensure_ascii=False),
+        )
+        s.add(row)
+        s.flush()
+        return row
