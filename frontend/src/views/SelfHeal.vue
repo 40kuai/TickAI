@@ -397,7 +397,7 @@ function diskTone(pct) {
 const dockerResidue = computed(() => {
   const img = scanResult.value?.docker_images || {}
   const stopped = (scanResult.value?.docker_containers || []).filter(
-    (c) => !String(c.status || '').toLowerCase().includes('up')
+    (c) => !String(c.status || '').toLowerCase().startsWith('up')
   )
   return { dangling: img.dangling || 0, stopped: stopped.length }
 })
@@ -408,11 +408,15 @@ const FILE_TABS = [
   { key: 'service_logs', label: '服务日志 /data' },
   { key: 'docker_logs', label: 'Docker 容器日志' },
 ]
-const activeFileRows = computed(() => {
-  if (fileTab.value === 'service_logs') return serviceLogRows.value
-  if (fileTab.value === 'docker_logs') return dockerLogRows.value
+
+// 按 tab key 取行列表(tab 计数与 activeFileRows 共用)
+function rowsForTab(key) {
+  if (key === 'service_logs') return serviceLogRows.value
+  if (key === 'docker_logs') return dockerLogRows.value
   return varLogRows.value
-})
+}
+
+const activeFileRows = computed(() => rowsForTab(fileTab.value))
 
 // 触发固定清理脚本(统一审批出口: auto 直执/approval 挂单/reject 拒绝)
 async function handleCleanup() {
@@ -622,7 +626,7 @@ onMounted(loadAll)
           </div>
 
           <!-- 大文件清单(tab) -->
-          <div v-if="activeFileRows.length" class="file-section">
+          <div v-if="varLogRows.length || serviceLogRows.length || dockerLogRows.length" class="file-section">
             <div class="file-tabs">
               <button
                 v-for="t in FILE_TABS"
@@ -631,7 +635,7 @@ onMounted(loadAll)
                 :class="{ active: fileTab === t.key }"
                 @click="fileTab = t.key"
               >
-                {{ t.label }}（{{ t.key === 'service_logs' ? serviceLogRows.length : t.key === 'docker_logs' ? dockerLogRows.length : varLogRows.length }}）
+                {{ t.label }}（{{ rowsForTab(t.key).length }}）
               </button>
             </div>
             <div class="file-list">
@@ -1152,9 +1156,9 @@ textarea.form-input {
 .wizard-body { padding: 14px; display: flex; flex-direction: column; gap: 14px; }
 .disk-cards { display: flex; gap: 10px; flex-wrap: wrap; }
 .disk-card { flex: 1; min-width: 160px; border-radius: var(--radius-sm); padding: 12px; display: flex; flex-direction: column; gap: 2px; }
-.disk-danger { background: rgba(239, 68, 68, 0.10); border: 1px solid rgba(239, 68, 68, 0.35); }
-.disk-warning { background: rgba(245, 158, 11, 0.10); border: 1px solid rgba(245, 158, 11, 0.35); }
-.disk-success { background: rgba(16, 185, 129, 0.10); border: 1px solid rgba(16, 185, 129, 0.35); }
+.disk-danger { background: color-mix(in srgb, var(--color-danger) 10%, transparent); border: 1px solid color-mix(in srgb, var(--color-danger) 35%, transparent); }
+.disk-warning { background: color-mix(in srgb, var(--color-warning) 10%, transparent); border: 1px solid color-mix(in srgb, var(--color-warning) 35%, transparent); }
+.disk-success { background: color-mix(in srgb, var(--color-success) 10%, transparent); border: 1px solid color-mix(in srgb, var(--color-success) 35%, transparent); }
 .disk-mount { font-weight: 600; font-size: 13px; }
 .disk-pct { font-size: 22px; font-weight: 700; }
 .disk-detail { font-size: 12px; color: var(--color-text-secondary); }
