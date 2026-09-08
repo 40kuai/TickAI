@@ -14,9 +14,12 @@ auto 为上层(decide/AI 合并)后的最终决策, 本模块仅规则层。
 """
 from __future__ import annotations
 
-from typing import Any, Dict
+import logging
+from typing import Any, Dict, Optional
 
 from . import actions, config
+
+logger = logging.getLogger(__name__)
 
 # 操作影响风险静态表(审批判定依据, "做什么"由表定; "动多大"由 AI 估)。
 # base: low|medium|high —— high 为规则硬约束, 强制人工审批, AI 无权放行。
@@ -82,3 +85,74 @@ def hard_rule(action_name: str, target: Dict[str, Any]) -> Dict[str, Any]:
         return {"decision": "approval", "reasons": [reason]}
     return {"decision": "allow",
             "reasons": [f"操作影响风险={risk}, 进入 AI 评估区间"]}
+
+
+def _judge_payload(action_name: str, target: Dict[str, Any],
+                   context: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "action_name": action_name,
+        "target": target,
+        "scene": context.get("scene"),
+        "triggered_by": context.get("triggered_by"),
+        "impact": context.get("impact"),
+        "metric": context.get("metric"),
+        "server_name": context.get("server_name"),
+    }
+
+
+def _default_judge(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """默认 AI 判定: TokenHub LLM 评估(在 Task 5 中实现)。
+    当前占位: 抛错 → fail-closed 默认审批(安全侧行为不变)。"""
+    raise RuntimeError("AI 判定未启用(approval._default_judge 未实现)")
+
+
+def _merge(judgement: Dict[str, Any], impact: Any, reasons: list) -> str:
+    """安全合并: 在规则放行区间内合并 AI 建议。auto 需满足三重条件。"""
+    rec = str((judgement or {}).get("recommendation", "approval"))
+    score = int((judgement or {}).get("risk_score", 5) or 5)
+    if rec == "reject":
+        ai_reasons = (judgement or {}).get("reasons", [])
+        reasons.append(f"AI 评估拒绝(risk={score}): {'; '.join(ai_reasons)}")
+        return "reject"
+    if rec == "auto" and score <= 2 and impact is not None:
+        reasons.append(f"AI 评估自主执行(risk={score})且影响面已确认")
+        return "auto"
+    reasons.append(f"AI 评估建议 {rec}(risk={score})")
+    return "approval"
+
+
+def decide(
+    server_id: int,
+    action_name: str,
+    target: Dict[str, Any],
+    context: Optional[Dict[str, Any]] = None,
+    judge_fn=None,
+) -> Dict[str, Any]:
+    """统一审批出口。返回 {decision, severity, reasons, ai_judgement}。
+
+    decision: auto(自主执行) | approval(生成审批单) | reject(拒绝执行)。
+    severity: auto→low, approval/reject→high(兼容前端 low/high badge)。
+    judge_fn: 可注入的 AI 判定函数(测试用); 缺省 _default_judge。
+    """
+    context = context or {}
+    hard = hard_rule(action_name, target)
+    if hard["decision"] != "allow":
+        return {"decision": hard["decision"], "severity": "high",
+                "reasons": hard["reasons"], "ai_judgement": None}
+
+    reasons = list(hard["reasons"])
+    impact = context.get("impact")
+    judge = judge_fn if judge_fn is not None else _default_judge
+    try:
+        judgement = judge(_judge_payload(action_name, target, context))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("AI 风险评估不可用(%s), fail-closed 默认审批: %s",
+                       type(exc).__name__, exc)
+        reasons.append("AI 风险评估不可用, 按人工审批处理(fail-closed)")
+        return {"decision": "approval", "severity": "high",
+                "reasons": reasons, "ai_judgement": None}
+
+    decision = _merge(judgement, impact, reasons)
+    severity = "low" if decision == "auto" else "high"
+    return {"decision": decision, "severity": severity,
+            "reasons": reasons, "ai_judgement": judgement}

@@ -54,5 +54,63 @@ class HardRuleTests(unittest.TestCase):
         self.assertEqual(r["decision"], "allow")
 
 
+class DecideTests(unittest.TestCase):
+    def setUp(self):
+        os.environ["SELFHEAL_LOG_CLEANUP_CATEGORIES_WHITELIST"] = "system,docker-prune"
+        os.environ["SELFHEAL_LOG_PATH_WHITELIST"] = "/var/log/nginx/access.log"
+        config.reload_config()
+
+    def tearDown(self):
+        os.environ.pop("SELFHEAL_LOG_CLEANUP_CATEGORIES_WHITELIST", None)
+        os.environ.pop("SELFHEAL_LOG_PATH_WHITELIST", None)
+        config.reload_config()
+
+    def _judge(self, payload):
+        # 固定返回 auto + score=1
+        return {"risk_score": 1, "recommendation": "auto", "reasons": ["影响极小"]}
+
+    def test_high_risk_forced_approval_ignores_ai(self):
+        d = approval.decide(1, "run_cleanup_script", {"mount": "/", "category": "all"},
+                            {"impact": {"files": 3}}, judge_fn=self._judge)
+        self.assertEqual(d["decision"], "approval")
+
+    def test_ai_reject_respected_in_allow_zone(self):
+        def _reject(payload):
+            return {"risk_score": 5, "recommendation": "reject", "reasons": ["核心目录"]}
+        d = approval.decide(1, "truncate_log",
+                            {"mount": "/", "path": "/var/log/nginx/access.log"},
+                            {"impact": {"files": 1, "size_mb": 4800}}, judge_fn=_reject)
+        self.assertEqual(d["decision"], "reject")
+
+    def test_ai_auto_requires_impact(self):
+        # 无影响面 → fail-closed, 即使 AI 说 auto 也不放行
+        d = approval.decide(1, "truncate_log",
+                            {"mount": "/", "path": "/var/log/nginx/access.log"},
+                            {"impact": None}, judge_fn=self._judge)
+        self.assertEqual(d["decision"], "approval")
+
+    def test_ai_auto_with_impact_approved(self):
+        d = approval.decide(1, "truncate_log",
+                            {"mount": "/", "path": "/var/log/nginx/access.log"},
+                            {"impact": {"files": 1, "size_mb": 2}}, judge_fn=self._judge)
+        self.assertEqual(d["decision"], "auto")
+
+    def test_judge_exception_fail_closed(self):
+        def _boom(payload):
+            raise RuntimeError("llm down")
+        d = approval.decide(1, "truncate_log",
+                            {"mount": "/", "path": "/var/log/nginx/access.log"},
+                            {"impact": {"files": 1}}, judge_fn=_boom)
+        self.assertEqual(d["decision"], "approval")
+        self.assertTrue(any("fail-closed" in r for r in d["reasons"]))
+
+    def test_reasons_and_ai_judgement_present(self):
+        d = approval.decide(1, "truncate_log",
+                            {"mount": "/", "path": "/var/log/nginx/access.log"},
+                            {"impact": {"files": 1}}, judge_fn=self._judge)
+        self.assertTrue(d["reasons"])
+        self.assertEqual(d["ai_judgement"]["recommendation"], "auto")
+
+
 if __name__ == "__main__":
     unittest.main()
