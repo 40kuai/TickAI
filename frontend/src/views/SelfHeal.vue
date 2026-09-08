@@ -499,6 +499,7 @@ async function handleCleanup() {
     cleanupError.value = err.response?.data?.detail || '触发清理失败'
   } finally {
     cleanupRunning.value = false
+    showQuickCleanup.value = true // 请求完成时展开面板,避免结果被隐藏
   }
 }
 
@@ -543,6 +544,7 @@ async function handleAiPlan() {
   } catch (err) {
     aiPlanError.value = err.response?.data?.detail || '提交策略失败'
   } finally {
+    showAdvanced.value = true // 请求完成时展开面板,避免结果被隐藏
     aiPlanRunning.value = false
   }
 }
