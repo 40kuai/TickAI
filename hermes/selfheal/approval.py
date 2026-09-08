@@ -170,9 +170,11 @@ def _default_judge(payload: Dict[str, Any]) -> Dict[str, Any]:
 def _coerce_score(value: Any) -> int:
     """AI 输出的 risk_score 保守化: 非法/非整数/越界一律按 5(fail-closed 方向)。
 
-    防畸形输出(如 'high'、2.9)被 int() 截断后误放行 auto——
+    防畸形输出(如 'high'、2.9、True)被 int() 截断后误放行 auto——
     例如 int(2.9)=2 会通过 score<=2 门槛, 必须整体拒绝。
     """
+    if isinstance(value, bool):  # True 是 int 子类, float(True)=1.0 会误判合法
+        return 5
     try:
         f = float(value)
     except (TypeError, ValueError):
@@ -182,13 +184,14 @@ def _coerce_score(value: Any) -> int:
     return int(f)
 
 
-def _merge(judgement: Optional[Dict[str, Any]], impact: Any, reasons: list) -> str:
+def _merge(judgement: Any, impact: Any, reasons: list) -> str:
     """安全合并: 在规则放行区间内合并 AI 建议。auto 需满足三重条件。
 
-    非法输入(非 dict/score 畸形)在此不抛——score 由 _coerce_score 保守化,
-    其余按缺省 approval 处理, 保证 fail-closed 不变量不被畸形输出击穿。
+    非法输入在此不抛——非 dict 按空判定, score 由 _coerce_score 保守化,
+    保证 fail-closed 不变量不被畸形输出击穿。
     """
-    judgement = judgement or {}
+    if not isinstance(judgement, dict):
+        judgement = {}
     rec = str(judgement.get("recommendation", "approval"))
     score = _coerce_score(judgement.get("risk_score", 5))
     if rec == "reject":
