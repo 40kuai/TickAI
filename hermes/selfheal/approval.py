@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, Optional
 
 from . import actions, config
@@ -266,7 +266,9 @@ def cooldown_active(server_id: int, scene: str, action_name: str,
 
     冷却期默认 config.COOLDOWN_HOURS; 传入 hours<=0 时关闭。
     基于 executed_at(执行时间)判定, 状态限定 executed/verified(真正执行过)。
-    SQLite 存带时区 ISO 字符串, 与 naive UTC 的 since 做前缀字符串比较(同 UTC 序一致)。
+    约定: 所有写入方必须以 UTC 写 executed_at(如 datetime.now(timezone.utc))。
+    SQLite 存无时区固定宽度 ISO 串, 与 naive UTC 的 since 等长字典序比较
+    (同 UTC 序 == 时间序)。
     """
     from sqlalchemy import exists, and_
 
@@ -276,7 +278,7 @@ def cooldown_active(server_id: int, scene: str, action_name: str,
     hours = hours if hours is not None else config.COOLDOWN_HOURS
     if hours <= 0:
         return False
-    since = datetime.utcnow() - timedelta(hours=hours)
+    since = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=hours)
     with db.session_scope() as s:
         q = s.query(exists().where(and_(
             SelfHealAction.server_id == server_id,

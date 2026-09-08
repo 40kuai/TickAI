@@ -285,6 +285,51 @@ class CooldownActiveTests(unittest.TestCase):
     def test_different_action_not_cooled(self):
         self.assertFalse(approval.cooldown_active(1, "disk_clean", "clean_cache", hours=1))
 
+    def test_pending_not_cooled(self):
+        # 对抗: 仅 pending(未执行)不冷却——冷却语义是"已执行过"
+        with db.session_scope() as s:
+            s.query(models.SelfHealAction).delete()
+            s.add(models.SelfHealAction(
+                server_id=1, scene="disk_clean", target=json.dumps({"mount": "/"}),
+                severity="high", action_name="truncate_log",
+                status="pending", triggered_by="auto",
+                executed_at=None))
+        self.assertFalse(approval.cooldown_active(1, "disk_clean", "truncate_log", hours=1))
+
+    def test_failed_not_cooled(self):
+        # 对抗: failed 不冷却——失败可重试
+        with db.session_scope() as s:
+            s.query(models.SelfHealAction).delete()
+            s.add(models.SelfHealAction(
+                server_id=1, scene="disk_clean", target=json.dumps({"mount": "/"}),
+                severity="low", action_name="truncate_log",
+                status="failed", triggered_by="auto", success=False,
+                executed_at=datetime.now(timezone.utc) - timedelta(minutes=5)))
+        self.assertFalse(approval.cooldown_active(1, "disk_clean", "truncate_log", hours=1))
+
+    def test_different_server_not_cooled(self):
+        # 对抗: 冷却按 server 隔离
+        with db.session_scope() as s:
+            s.query(models.SelfHealAction).delete()
+            if not s.query(models.Server).filter_by(name="s2").first():
+                cred = s.query(models.SSHCredential).first()
+                s.add(models.Server(name="s2", host="10.0.0.2",
+                                    ssh_credential_id=cred.id))
+        self._insert_executed(2, "disk_clean", "truncate_log", hours_ago=0.5)
+        self.assertFalse(approval.cooldown_active(1, "disk_clean", "truncate_log", hours=1))
+
+
+class OverflowScoreTests(unittest.TestCase):
+    """score 转换对超大整数的容错(fail-closed 方向)。"""
+
+    def test_parse_judgement_huge_int_rejected(self):
+        with self.assertRaises(ValueError):
+            approval._parse_judgement(
+                f'{{"recommendation": "auto", "risk_score": {10 ** 400}}}')
+
+    def test_coerce_score_huge_int_defaults_5(self):
+        self.assertEqual(approval._coerce_score(10 ** 400), 5)
+
 
 if __name__ == "__main__":
     unittest.main()
