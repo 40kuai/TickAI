@@ -196,6 +196,39 @@ class ParseJudgementTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             approval._parse_judgement('{"recommendation": "auto", "risk_score": 9}')
 
+    def test_float_score_rejected(self):
+        # 对抗: 2.9 不得被 int() 截断为 2(真实 LLM 路径, 与 _coerce_score 同严格度)
+        with self.assertRaises(ValueError):
+            approval._parse_judgement(
+                '{"recommendation": "auto", "risk_score": 2.9}')
+
+    def test_bool_score_rejected(self):
+        # 对抗: bool 是 int 子类, True 不得被 int() 洗白为 1
+        with self.assertRaises(ValueError):
+            approval._parse_judgement(
+                '{"recommendation": "auto", "risk_score": true}')
+
+    def test_non_numeric_score_rejected(self):
+        with self.assertRaises(ValueError):
+            approval._parse_judgement(
+                '{"recommendation": "auto", "risk_score": "high"}')
+
+    def test_malformed_json_raises(self):
+        # 对抗: 非法 JSON 抛 ValueError(带片段, 可排障), 不裸抛 JSONDecodeError
+        with self.assertRaises(ValueError):
+            approval._parse_judgement("{not json")
+
+    def test_non_object_json_raises(self):
+        # 对抗: JSON 顶层须为对象
+        with self.assertRaises(ValueError):
+            approval._parse_judgement("[1, 2, 3]")
+
+    def test_reasons_non_list_reset(self):
+        # 对抗: reasons 非 list → 置空(不抛)
+        j = approval._parse_judgement(
+            '{"recommendation": "approval", "risk_score": 3, "reasons": "oops"}')
+        self.assertEqual(j["reasons"], [])
+
     def test_default_judge_fail_closed_when_not_configured(self):
         # .env 会兜底提供真实 TOKENHUB_API_KEY(settings._get 优先级: 环境变量>.env>默认),
         # 只清环境变量仍会读到 key 并真实触网 → 必须 patch 配置接口返回空串。

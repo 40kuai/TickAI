@@ -106,7 +106,7 @@ _JUDGE_SYSTEM_PROMPT = """你是运维安全审批评估器, 评估服务器上�
 - 只有影响极小、可快速重建、无业务影响的操作才能 auto。
 - 不确定、影响面未知、不可逆且影响大 → approval。
 - docker prune、批量删除等不可逆批量操作已由规则层强制审批, 你不必评估这类。
-输入 JSON 含: action_name / target / impact(文件数、大小MB, 可为空) / metric(磁盘水位%, 仅供参考) / triggered_by。
+输入 JSON 含: action_name / target / scene / server_name / impact(文件数、大小MB, 可为空) / metric(磁盘水位%, 仅供参考) / triggered_by。
 输出严格 JSON: {"risk_score": 1-5, "recommendation": "auto"|"approval"|"reject", "reasons": ["理由1", "理由2"]}
 规则: risk_score>=4 必须 approval; auto 仅限 risk_score<=2 且影响面明确且极小。"""
 
@@ -115,22 +115,33 @@ def _parse_judgement(content: str) -> Dict[str, Any]:
     """解析 LLM 返回的 JSON(兼容 ```json 围栏), 非法值抛 ValueError(fail-closed)。
 
     任何解析/校验失败向上抛, 由 decide() 捕获后默认审批, 绝不默认放行。
+    risk_score 校验与 _coerce_score 同严格度: 拒绝 bool/非整数 float(2.9),
+    防止 LLM 真实路径输出畸形 score 被 int() 截断洗白后误放行 auto。
     """
     text = (content or "").strip()
     if text.startswith("```"):
         text = text.strip("`").strip()
         if text.startswith("json"):
             text = text[4:].strip()
-    data = json.loads(text)
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"非法 JSON 输出: {text[:200]!r}") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"非法 JSON 结构(须为对象): {text[:200]!r}")
     rec = str(data.get("recommendation", "approval"))
     if rec not in ("auto", "approval", "reject"):
         raise ValueError(f"非法 recommendation: {rec!r}")
+    raw = data.get("risk_score", 5)
+    if isinstance(raw, bool):  # bool 是 int 子类, 必须先行拒绝
+        raise ValueError(f"非法 risk_score: {raw!r}")
     try:
-        score = int(data.get("risk_score", 5))
+        f = float(raw)
     except (TypeError, ValueError) as exc:
-        raise ValueError(f"非法 risk_score: {data.get('risk_score')!r}") from exc
-    if not 1 <= score <= 5:
-        raise ValueError(f"risk_score 越界: {score}")
+        raise ValueError(f"非法 risk_score: {raw!r}") from exc
+    if not f.is_integer() or not 1 <= f <= 5:
+        raise ValueError(f"risk_score 越界: {raw!r}")
+    score = int(f)
     reasons = data.get("reasons", [])
     if not isinstance(reasons, list):
         reasons = []
@@ -242,5 +253,7 @@ def decide(
                 "reasons": reasons, "ai_judgement": None}
 
     severity = "low" if decision == "auto" else "high"
+    # 非 dict judgement(_merge 已按空判定)不透传, 保持 ai_judgement: dict|None 契约
+    ai_judgement = judgement if isinstance(judgement, dict) else None
     return {"decision": decision, "severity": severity,
-            "reasons": reasons, "ai_judgement": judgement}
+            "reasons": reasons, "ai_judgement": ai_judgement}
