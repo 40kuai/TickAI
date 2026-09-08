@@ -188,6 +188,15 @@ def _run(
                 "action_id": record.id, "reasons": d["reasons"],
                 "action_name": action_name,
                 "message": "需人工审批, 已生成审批单"}
+    if d["decision"] != "auto":
+        # fail-open 防护: 未知决策值一律 fail-closed 挂审批单, 绝不直接执行
+        record = _persist(server_id, scene, target, "high", action_name,
+                          "pending", triggered_by, reasons=d["reasons"],
+                          rendered_command=None)
+        return {"severity": "high", "status": "pending", "success": False,
+                "action_id": record.id, "reasons": d["reasons"],
+                "action_name": action_name,
+                "message": "审批出口异常决策, 已按人工审批处理"}
 
     # ---- 5. auto: 渲染(模板白名单, 全流程仅渲染一次) + 执行验证 ----
     try:
