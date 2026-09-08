@@ -386,11 +386,13 @@ function removeSelected(key) {
 // 已选汇总数组(模板渲染)
 const selectedList = computed(() => Array.from(selected.value.entries()))
 
-// 策略 JSON 预览(实时生成, 只读; journal size 动态取输入框当前值)
+// 策略 JSON 预览(实时生成, 只读; journal size 实时取输入框值并收敛到 [1,10000] 整数, 预览=提交)
 const wizardStrategy = computed(() => ({
   mount: '/',
   items: Array.from(selected.value.values()).map((s) => {
-    const params = s.type === 'journal_vacuum' ? { ...s.params, size: journalSize.value } : s.params
+    const params = s.type === 'journal_vacuum'
+      ? { ...s.params, size: Math.round(Math.min(Math.max(Number(journalSize.value) || 1, 1), 10000)) }
+      : s.params
     return { type: s.type, ...params }
   }),
 }))
