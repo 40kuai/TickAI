@@ -14,6 +14,7 @@ auto 为上层(decide/AI 合并)后的最终决策, 本模块仅规则层。
 """
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any, Callable, Dict, Optional
 
@@ -100,10 +101,70 @@ def _judge_payload(action_name: str, target: Dict[str, Any],
     }
 
 
+_JUDGE_SYSTEM_PROMPT = """你是运维安全审批评估器, 评估服务器上一个写操作是否需要人工审批。
+安全原则:
+- 只有影响极小、可快速重建、无业务影响的操作才能 auto。
+- 不确定、影响面未知、不可逆且影响大 → approval。
+- docker prune、批量删除等不可逆批量操作已由规则层强制审批, 你不必评估这类。
+输入 JSON 含: action_name / target / impact(文件数、大小MB, 可为空) / metric(磁盘水位%, 仅供参考) / triggered_by。
+输出严格 JSON: {"risk_score": 1-5, "recommendation": "auto"|"approval"|"reject", "reasons": ["理由1", "理由2"]}
+规则: risk_score>=4 必须 approval; auto 仅限 risk_score<=2 且影响面明确且极小。"""
+
+
+def _parse_judgement(content: str) -> Dict[str, Any]:
+    """解析 LLM 返回的 JSON(兼容 ```json 围栏), 非法值抛 ValueError(fail-closed)。
+
+    任何解析/校验失败向上抛, 由 decide() 捕获后默认审批, 绝不默认放行。
+    """
+    text = (content or "").strip()
+    if text.startswith("```"):
+        text = text.strip("`").strip()
+        if text.startswith("json"):
+            text = text[4:].strip()
+    data = json.loads(text)
+    rec = str(data.get("recommendation", "approval"))
+    if rec not in ("auto", "approval", "reject"):
+        raise ValueError(f"非法 recommendation: {rec!r}")
+    try:
+        score = int(data.get("risk_score", 5))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"非法 risk_score: {data.get('risk_score')!r}") from exc
+    if not 1 <= score <= 5:
+        raise ValueError(f"risk_score 越界: {score}")
+    reasons = data.get("reasons", [])
+    if not isinstance(reasons, list):
+        reasons = []
+    return {"risk_score": score, "recommendation": rec,
+            "reasons": [str(r) for r in reasons]}
+
+
 def _default_judge(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """默认 AI 判定: TokenHub LLM 评估(在 Task 5 中实现)。
-    当前占位: 抛错 → fail-closed 默认审批(安全侧行为不变)。"""
-    raise RuntimeError("AI 判定未启用(approval._default_judge 未实现)")
+    """默认 AI 判定: TokenHub LLM 非流式调用 + 结构化解析。
+
+    调用失败/解析失败会向上抛, 由 decide() 捕获后 fail-closed 默认审批。
+    """
+    from hermes.config import settings as config
+    from hermes.core import llm_client
+
+    api_key = config.LLM_API_KEY()
+    if not api_key:
+        raise RuntimeError("TOKENHUB_API_KEY 未配置, AI 风险评估不可用")
+    client = llm_client.TokenHubClient(
+        api_key=api_key,
+        model=config.LLM_MODEL(),
+        base_url=config.LLM_BASE_URL(),
+        timeout=30.0,
+        max_retries=1,
+    )
+    try:
+        resp = client.chat([
+            {"role": "system", "content": _JUDGE_SYSTEM_PROMPT},
+            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+        ])
+        content = resp["choices"][0]["message"]["content"]
+        return _parse_judgement(content)
+    finally:
+        client.close()
 
 
 def _coerce_score(value: Any) -> int:

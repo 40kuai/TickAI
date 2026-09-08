@@ -1,7 +1,9 @@
 """Tests for hermes.selfheal.approval (unified approval gate)."""
 import os
 import unittest
+from unittest.mock import patch
 
+from hermes.config import settings
 from hermes.selfheal import approval, config
 
 
@@ -169,6 +171,37 @@ class DecideTests(unittest.TestCase):
                              {"impact": {"files": 1}}, judge_fn=self._judge)
         self.assertEqual(d2["decision"], "reject")
         self.assertIsNone(d2["ai_judgement"])
+
+
+class ParseJudgementTests(unittest.TestCase):
+    """LLM 软判定解析器(_parse_judgement): 纯函数, 不触网。"""
+
+    def test_parse_plain_json(self):
+        j = approval._parse_judgement(
+            '{"risk_score": 2, "recommendation": "auto", "reasons": ["影响小"]}')
+        self.assertEqual(j["recommendation"], "auto")
+        self.assertEqual(j["risk_score"], 2)
+
+    def test_parse_fenced_json(self):
+        j = approval._parse_judgement(
+            '```json\n{"risk_score": 4, "recommendation": "approval", "reasons": []}\n```')
+        self.assertEqual(j["recommendation"], "approval")
+        self.assertEqual(j["risk_score"], 4)
+
+    def test_invalid_recommendation_raises(self):
+        with self.assertRaises(ValueError):
+            approval._parse_judgement('{"recommendation": "maybe"}')
+
+    def test_out_of_range_score_raises(self):
+        with self.assertRaises(ValueError):
+            approval._parse_judgement('{"recommendation": "auto", "risk_score": 9}')
+
+    def test_default_judge_fail_closed_when_not_configured(self):
+        # .env 会兜底提供真实 TOKENHUB_API_KEY(settings._get 优先级: 环境变量>.env>默认),
+        # 只清环境变量仍会读到 key 并真实触网 → 必须 patch 配置接口返回空串。
+        with patch.object(settings, "LLM_API_KEY", return_value=""):
+            with self.assertRaises(Exception):
+                approval._default_judge({})
 
 
 if __name__ == "__main__":
