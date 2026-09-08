@@ -286,7 +286,7 @@ const aiPlanError = ref('')
 const aiPlanResult = ref(null)
 const strategyJson = ref('')
 
-// 触发固定清理脚本(生成审批单)
+// 触发固定清理脚本(统一审批出口: auto 直执/approval 挂单/reject 拒绝)
 async function handleCleanup() {
   if (cleanupRunning.value) return
   cleanupError.value = ''
@@ -325,7 +325,7 @@ async function handleScan() {
   }
 }
 
-// 提交 AI 策略(生成审批单)
+// 提交 AI 策略(统一审批出口: auto 直执/approval 挂单/reject 拒绝)
 async function handleAiPlan() {
   if (aiPlanRunning.value) return
   aiPlanError.value = ''
@@ -466,7 +466,7 @@ onMounted(loadAll)
       <div v-if="cleanupError" class="error-tip">{{ cleanupError }}</div>
       <div class="form-actions">
         <button class="btn btn-primary" :disabled="cleanupRunning" @click="handleCleanup">
-          {{ cleanupRunning ? '触发中…' : '▶ 触发固定清理(生成审批单)' }}
+          {{ cleanupRunning ? '触发中…' : '▶ 触发固定清理(按风险审批)' }}
         </button>
         <button class="btn btn-outline" :disabled="scanRunning" @click="handleScan">
           {{ scanRunning ? '扫描中…' : '🔍 只读扫描' }}
@@ -495,7 +495,7 @@ onMounted(loadAll)
       <div v-if="aiPlanError" class="error-tip">{{ aiPlanError }}</div>
       <div class="form-actions">
         <button class="btn btn-primary" :disabled="aiPlanRunning" @click="handleAiPlan">
-          {{ aiPlanRunning ? '提交中…' : '提交 AI 策略(生成审批单)' }}
+          {{ aiPlanRunning ? '提交中…' : '提交 AI 策略(按风险审批)' }}
         </button>
       </div>
       <div v-if="aiPlanResult" class="result-box">

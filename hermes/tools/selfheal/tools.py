@@ -1,7 +1,8 @@
 """run_selfheal 工具 — 让对话型 LLM(Web/飞书)能触发受控自愈闭环(KR2 Task 8)。
 
-流程(确定性, 不依赖 LLM 自由发挥): 探测 → 分级 → 低危自主执行 / 高危落审批单 →
-验证恢复。写命令只来自模板白名单(hermes.selfheal.actions.render_command)。
+流程(确定性, 不依赖 LLM 自由发挥): 探测 → 影响面采集 → 统一审批出口(规则硬约束 + AI
+软判定) → auto 直执 / approval 挂审批单 / reject 拒绝 → 验证恢复。写命令只来自模板
+白名单(hermes.selfheal.actions.render_command)。
 
 与直接调 orchestrator 的区别: 本工具带参数白名单校验(server_id 为 int / scene 枚举),
 并以 triggered_by="dialog" 落审计, 便于区分人工/对话触发来源。
@@ -21,11 +22,12 @@ def _selfheal_schema() -> Dict[str, Any]:
     return {
         "name": "run_selfheal",
         "description": (
-            "触发一次受控自愈闭环: 探测 → 分级 → 低危自主执行/高危落审批单 → 验证恢复。"
+            "触发一次受控自愈闭环: 探测 → 影响面采集 → 统一审批出口(AI按操作影响风险判定, "
+            "规则硬约束兜底) → auto 直执/approval 挂审批单/reject 拒绝 → 验证恢复。"
             "写命令只来自模板白名单。"
             "场景: process_restart(重启服务)、disk_clean(磁盘清理)、cache_clean(缓存清理)、"
-            "log_cleanup_script(日志清理, 写操作, 恒落审批单, 缺省跑全部4类)。"
-            "高危场景不会直接执行写命令, 而是生成审批单等待人工批准。"
+            "log_cleanup_script(日志清理, 写操作, 按风险审批, 缺省跑全部4类)。"
+            "高危操作(docker-prune等)不会直接执行, 而是生成审批单等待人工批准。"
         ),
         "parameters": {
             "type": "object",
