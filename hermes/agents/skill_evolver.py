@@ -71,9 +71,11 @@ class SkillEvolver(BaseAgent):
         context.append_history(self.name, f"skill {skill_name} evolved")
         return context
 
-    def evolve_skill(self, skill_name: str, save: bool = False) -> str:
+    def evolve_skill(self, skill_name: str, save: bool = False,
+                     max_tokens: Optional[int] = None) -> str:
         """Return the new (improved) skill content. Optionally save it.
 
+        max_tokens: 限制 LLM 输出长度(长技能生成必传, 防超时)。
         Does NOT save by default — caller decides whether to apply the change.
         """
         # 1. Load current skill
@@ -95,6 +97,7 @@ class SkillEvolver(BaseAgent):
                     {"role": "system", "content": self._system_prompt()},
                     {"role": "user", "content": prompt},
                 ],
+                max_tokens=max_tokens,
             )
         except Exception as exc:  # noqa: BLE001
             raise EvolutionError(f"LLM call failed: {exc}") from exc
@@ -215,7 +218,7 @@ class SkillEvolver(BaseAgent):
 _default_evolver: Optional[SkillEvolver] = None
 
 
-def evolve_skill(skill_name: str, save: bool = False) -> str:
+def evolve_skill(skill_name: str, save: bool = False, max_tokens: Optional[int] = None) -> str:
     """Evolve a skill using a default-constructed evolver (real LLM client)."""
     global _default_evolver
     if _default_evolver is None:
@@ -225,6 +228,9 @@ def evolve_skill(skill_name: str, save: bool = False) -> str:
             api_key=LLM_API_KEY(),
             model=LLM_MODEL(),
             base_url=LLM_BASE_URL(),
+            # 技能生成输出长: 放宽单次超时、减少重试(避免 60s*3 累计 3 分钟才报错)
+            timeout=120.0,
+            max_retries=1,
         )
         _default_evolver = SkillEvolver(llm_client=client)
-    return _default_evolver.evolve_skill(skill_name, save=save)
+    return _default_evolver.evolve_skill(skill_name, save=save, max_tokens=max_tokens)

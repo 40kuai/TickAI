@@ -71,7 +71,7 @@ class SkillEvolutionApiTests(unittest.TestCase):
 
     @patch("hermes.agents.skill_evolver.evolve_skill", return_value=NEW_CONTENT)
     def test_evolve_creates_pending_without_writing(self, _mock_evolve):
-        res = self.client.post("/api/skills/detect_oom_killed/evolve")
+        res = self.client.post("/api/skills/detect_oom_killed/evolve?max_tokens=2048")
         self.assertEqual(res.status_code, 200)
         data = res.json()
         self.assertEqual(data["status"], "pending")
@@ -81,6 +81,8 @@ class SkillEvolutionApiTests(unittest.TestCase):
             self.assertEqual(row.reason, "auto_evolve")
             self.assertEqual(row.version, 2)
             self.assertIn("improved", row.content)
+        _mock_evolve.assert_called_once()
+        self.assertEqual(_mock_evolve.call_args.kwargs["max_tokens"], 2048)
 
     @patch("hermes.agents.skill_evolver.evolve_skill",
            side_effect=EvolutionError("LLM down"))
@@ -104,7 +106,7 @@ class SkillEvolutionApiTests(unittest.TestCase):
         self.assertIn("improved", saved_content)
         # 原候选标记已处置
         with db.session_scope() as s:
-            self.assertEqual(s.query(models.SkillVersion).get(vid).status, "rolled_back")
+            self.assertEqual(s.query(models.SkillVersion).get(vid).status, "approved")
 
     @patch("hermes.agents.skill_evolver.evolve_skill", return_value=NEW_CONTENT)
     @patch("hermes.skills.loader.save_skill")
@@ -116,7 +118,7 @@ class SkillEvolutionApiTests(unittest.TestCase):
         self.assertEqual(res.json()["status"], "rejected")
         mock_save.assert_not_called()
         with db.session_scope() as s:
-            self.assertEqual(s.query(models.SkillVersion).get(vid).status, "rolled_back")
+            self.assertEqual(s.query(models.SkillVersion).get(vid).status, "rejected")
 
     @patch("hermes.agents.skill_evolver.evolve_skill", return_value=NEW_CONTENT)
     @patch("hermes.skills.loader.save_skill")
@@ -142,10 +144,13 @@ class SkillEvolutionApiTests(unittest.TestCase):
         self.assertIn("仅 pending", res.json()["detail"])
 
     def test_versions_include_status(self):
+        with db.session_scope() as s:
+            v1 = s.query(models.SkillVersion).filter_by(version=1).first()
         res = self.client.get("/api/skills/detect_oom_killed/versions")
         self.assertEqual(res.status_code, 200)
         data = res.json()
         self.assertEqual(data["count"], 1)
+        self.assertEqual(data["versions"][0]["id"], v1.id)
         self.assertEqual(data["versions"][0]["status"], "active")
 
     @patch("hermes.agents.skill_evolver.evolve_skill", return_value=NEW_CONTENT)

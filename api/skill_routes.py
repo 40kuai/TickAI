@@ -10,8 +10,9 @@ P1 能力治理增量(反馈闭环): 技能执行反馈(SkillOutcome)查询/标�
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
 from hermes.data import db, models
@@ -133,6 +134,7 @@ def get_skill_versions(name: str, user=Depends(get_current_user)):
             "skill_name": name,
             "versions": [
                 {
+                    "id": r.id,
                     "version": r.version,
                     "reason": r.reason,
                     "status": r.status,
@@ -151,15 +153,22 @@ def get_skill_versions(name: str, user=Depends(get_current_user)):
 
 
 @router.post("/{name}/evolve")
-def evolve_skill(name: str, user=Depends(get_current_user)):
-    """生成进化候选版本(pending), 不写盘; 人工审批后才生效(fail-closed 门禁)."""
+def evolve_skill(
+    name: str,
+    max_tokens: Optional[int] = Query(None, ge=256, le=16384),
+    user=Depends(get_current_user),
+):
+    """生成进化候选版本(pending), 不写盘; 人工审批后才生效(fail-closed 门禁).
+
+    max_tokens: 限制 LLM 输出长度, 防止长技能生成超时(默认不限制, 由后端兜底)。
+    """
     import difflib
     from pathlib import Path
 
     from hermes.agents.skill_evolver import EvolutionError, evolve_skill as _evolve
 
     try:
-        new_content = _evolve(name, save=False)
+        new_content = _evolve(name, save=False, max_tokens=max_tokens)
     except EvolutionError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -226,13 +235,13 @@ def approve_skill_version(name: str, vid: int, user=Depends(get_current_user)):
     save_skill(name, content, reason="auto_evolve")
     with db.session_scope() as s:
         row = s.query(models.SkillVersion).filter_by(id=vid, skill_name=name).first()
-        row.status = "rolled_back"  # 原候选标记已处置
+        row.status = "approved"  # 候选已批准生效; 回滚才用 rolled_back
     return {"status": "approved", "version_id": vid}
 
 
 @router.post("/{name}/versions/{vid}/reject")
 def reject_skill_version(name: str, vid: int, user=Depends(get_current_user)):
-    """拒绝候选版本: 不写盘, 标记 rolled_back. 仅 pending 可拒绝."""
+    """拒绝候选版本: 不写盘, 标记 rejected. 仅 pending 可拒绝."""
     with db.session_scope() as s:
         row = (
             s.query(models.SkillVersion)
@@ -249,7 +258,7 @@ def reject_skill_version(name: str, vid: int, user=Depends(get_current_user)):
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"版本 {vid} 状态为 {row.status}, 仅 pending 候选可拒绝",
             )
-        row.status = "rolled_back"
+        row.status = "rejected"
     return {"status": "rejected", "version_id": vid}
 
 

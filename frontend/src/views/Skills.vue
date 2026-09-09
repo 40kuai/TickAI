@@ -40,7 +40,9 @@ const REASON_LABELS = {
 const STATUS_LABELS = {
   active: '线上',
   pending: '待审批',
-  rolled_back: '已处置',
+  approved: '已批准',
+  rejected: '已拒绝',
+  rolled_back: '已回滚',
 }
 
 // 触发器标签映射
@@ -578,6 +580,7 @@ onMounted(loadSkills)
   font-size: 11px;
   line-height: 1.5;
   background: var(--color-bg-code, #f8fafc);
+  color: #e2e8f0;
   border-radius: 4px;
   padding: 8px;
   overflow-x: auto;

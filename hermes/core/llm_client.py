@@ -44,15 +44,18 @@ class TokenHubClient:
             self._client = httpx.Client(timeout=self.timeout)
         return self._client
 
-    def chat(self, messages, tools=None) -> Dict[str, Any]:
+    def chat(self, messages, tools=None, max_tokens=None) -> Dict[str, Any]:
         """POST a chat completion request. Returns the raw JSON dict.
 
+        max_tokens: 限制输出 token 数(长输出场景必传, 防止生成超时/拖垮连接).
         Transient transport errors (e.g. TLS EOF from the upstream proxy
         dropping the connection) are retried with exponential backoff.
         """
         payload = {"model": self.model, "messages": messages, "stream": False}
         if tools:
             payload["tools"] = tools
+        if max_tokens is not None:
+            payload["max_tokens"] = int(max_tokens)
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
