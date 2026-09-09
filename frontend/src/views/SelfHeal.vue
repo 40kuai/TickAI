@@ -112,6 +112,7 @@ const SCENE_GROUPS = [
 const serverId = ref('')
 const serviceName = ref('')  // 服务进程异常: 服务名
 const cacheMode = ref('')    // 缓存占用过高: drop_caches 模式(如 3)
+const activeTab = ref('disk') // 场景 Tab(进入页面即见三入口, 避免内容堆叠过长)
 const sceneRunning = ref('') // 当前运行中的场景 key('process'/'cache'), 空=无
 const sceneError = ref('')
 const sceneErrorKey = ref('')   // 错误归属场景
@@ -551,16 +552,27 @@ onMounted(loadAll)
       </select>
     </div>
 
+    <!-- 自愈场景 Tab: 进入页面即见三个功能入口, 点 Tab 切换避免内容垂直堆叠过长 -->
+    <div class="scene-tabs">
+      <button
+        v-for="g in SCENE_GROUPS"
+        :key="g.key"
+        class="scene-tab"
+        :class="{ active: activeTab === g.key }"
+        @click="activeTab = g.key"
+      >
+        <span class="scene-tab-icon">{{ g.icon }}</span>
+        <span class="scene-tab-title">{{ g.title }}</span>
+        <span v-if="pendingByGroup[g.key]" class="scene-badge">{{ pendingByGroup[g.key] }}</span>
+      </button>
+    </div>
+
     <!-- 自愈场景 -->
     <div class="scene-grid">
       <!-- 磁盘空间不足 -->
-      <div class="scene-card">
+      <div class="scene-card" v-show="activeTab === 'disk'">
         <div class="scene-head">
-          <span class="scene-icon">🗄</span>
           <div class="scene-title-block">
-            <div class="scene-title">磁盘空间不足
-              <span v-if="pendingByGroup.disk" class="scene-badge">{{ pendingByGroup.disk }}</span>
-            </div>
             <div class="scene-desc">扫描大文件/日志/journal/docker 残留，勾选后按风险审批清理</div>
           </div>
         </div>
@@ -699,13 +711,9 @@ onMounted(loadAll)
       </div>
 
       <!-- 服务进程异常 -->
-      <div class="scene-card">
+      <div class="scene-card" v-show="activeTab === 'process'">
         <div class="scene-head">
-          <span class="scene-icon">♻️</span>
           <div class="scene-title-block">
-            <div class="scene-title">服务进程异常
-              <span v-if="pendingByGroup.process" class="scene-badge">{{ pendingByGroup.process }}</span>
-            </div>
             <div class="scene-desc">重启指定服务，自动 探测 → 审批 → 执行 → 验证</div>
           </div>
         </div>
@@ -734,13 +742,9 @@ onMounted(loadAll)
       </div>
 
       <!-- 缓存占用过高 -->
-      <div class="scene-card">
+      <div class="scene-card" v-show="activeTab === 'cache'">
         <div class="scene-head">
-          <span class="scene-icon">🧹</span>
           <div class="scene-title-block">
-            <div class="scene-title">缓存占用过高
-              <span v-if="pendingByGroup.cache" class="scene-badge">{{ pendingByGroup.cache }}</span>
-            </div>
             <div class="scene-desc">清理系统缓存（pagecache/dentry/inode）</div>
           </div>
         </div>
@@ -1256,9 +1260,17 @@ textarea.form-input {
 /* 自愈场景卡片 */
 .global-server { margin-bottom: 16px; display: flex; align-items: center; gap: 10px; }
 .global-server .form-select { max-width: 360px; }
+/* 场景 Tab: 进入页面即见三个功能入口 */
+.scene-tabs { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
+.scene-tab { display: flex; align-items: center; gap: 8px; padding: 9px 16px; border: 1px solid var(--color-border-light); border-radius: var(--radius-md, 10px); background: var(--color-card); cursor: pointer; font-size: 14px; color: var(--color-text-secondary); transition: all .15s ease; }
+.scene-tab:hover { border-color: var(--color-primary); color: var(--color-text); }
+.scene-tab.active { background: var(--color-primary); border-color: var(--color-primary); color: #fff; }
+.scene-tab.active .scene-badge { background: rgba(255, 255, 255, .9); color: var(--color-primary); }
+.scene-tab-icon { font-size: 16px; }
+.scene-tab-title { font-weight: 500; }
 .scene-grid { display: flex; flex-direction: column; gap: 16px; margin-bottom: 24px; }
 .scene-card { border: 1px solid var(--color-border-light); border-radius: var(--radius-md, 10px); overflow: hidden; }
-.scene-head { display: flex; align-items: center; gap: 12px; padding: 14px 16px; background: var(--color-border-light); }
+.scene-head { display: flex; align-items: center; gap: 12px; padding: 10px 16px; background: var(--color-border-light); }
 .scene-icon { font-size: 20px; }
 .scene-title-block { flex: 1; }
 .scene-title { font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
