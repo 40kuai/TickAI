@@ -125,16 +125,29 @@ class SkillEvolutionApiTests(unittest.TestCase):
     @patch("hermes.agents.skill_evolver.evolve_skill", return_value=NEW_CONTENT)
     @patch("hermes.skills.loader.save_skill")
     def test_rollback_creates_new_active_version(self, mock_save, _mock_evolve):
-        # 造一条历史 active v1(已有), 回滚到它
+        # 先审批候选让线上变为 NEW_CONTENT(v2 active), 再回滚到 v1(ORIGINAL) → 内容不同 → 200
+        self.client.post("/api/skills/detect_oom_killed/evolve")
+        vid = self._pending_id()
+        self.client.post(f"/api/skills/detect_oom_killed/versions/{vid}/approve")
         with db.session_scope() as s:
-            v1 = s.query(models.SkillVersion).filter_by(version=1).first()
-            v1_id = v1.id
+            v1_id = s.query(models.SkillVersion).filter_by(version=1).first().id
         res = self.client.post(f"/api/skills/detect_oom_killed/versions/{v1_id}/rollback")
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()["target_version"], 1)
-        mock_save.assert_called_once()
+        # approve 写盘 1 次 + rollback 写盘 1 次, 最后一次 reason=rollback
+        self.assertEqual(mock_save.call_count, 2)
         args = mock_save.call_args
         self.assertEqual(args[1]["reason"], "rollback")
+
+    @patch("hermes.skills.loader.save_skill")
+    def test_rollback_same_content_returns_409(self, mock_save):
+        """目标版本内容与当前线上一致 → 拒绝, 防止产生无意义冗余版本(且不写盘)."""
+        with db.session_scope() as s:
+            v1_id = s.query(models.SkillVersion).filter_by(version=1).first().id
+        res = self.client.post(f"/api/skills/detect_oom_killed/versions/{v1_id}/rollback")
+        self.assertEqual(res.status_code, 409)
+        self.assertIn("无需回滚", res.json()["detail"])
+        mock_save.assert_not_called()
 
     @patch("hermes.agents.skill_evolver.evolve_skill", return_value=NEW_CONTENT)
     def test_approve_non_pending_returns_409(self, _mock_evolve):

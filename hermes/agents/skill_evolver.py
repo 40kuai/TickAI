@@ -51,7 +51,7 @@ class SkillEvolver(BaseAgent):
         llm_client: Any,
         skills_dir: str | Path = SKILLS_DIR,
         max_outcomes: int = 20,
-        language: str = "en",
+        language: str = "zh",
     ):
         self.llm = llm_client
         self.skills_dir = Path(skills_dir)
@@ -148,6 +148,13 @@ class SkillEvolver(BaseAgent):
             "and a body of instructions for an LLM to follow.\n\n"
             "Your job: given the current skill and recent user feedback, produce an IMPROVED version "
             "that addresses the feedback while keeping the same name and read-only safety guarantees.\n\n"
+            "IMPORTANT principles:\n"
+            "- Make MINIMAL, targeted changes based on the feedback. Preserve the existing content, "
+            "structure, tool names, and wording as much as possible — do NOT rewrite the whole skill "
+            "or introduce content unrelated to the feedback.\n"
+            "- Keep the SAME LANGUAGE as the current skill content. If the current skill is written "
+            "in Chinese, the output must stay Chinese; do not translate it into English.\n"
+            "- Keep the frontmatter fields exactly as-is except for genuine, feedback-driven improvements.\n\n"
             "Output format: return ONLY the complete new skill content (frontmatter + body). "
             "Do not include explanations, code fences, or any other text.\n\n"
             f"{LANGUAGE_DIRECTIVES[self.language]}"

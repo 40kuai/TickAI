@@ -298,6 +298,18 @@ def rollback_skill_version(name: str, vid: int, user=Depends(get_current_user)):
             )
         content = row.content
         target = row.version
+        # 防无效回滚: 目标内容与当前线上(最新 active 版本)一致时拒绝, 避免产生冗余版本
+        cur = (
+            s.query(models.SkillVersion)
+            .filter_by(skill_name=name, status="active")
+            .order_by(models.SkillVersion.version.desc())
+            .first()
+        )
+        if cur is not None and cur.content == content:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"版本 {vid} 的内容与当前线上一致, 无需回滚",
+            )
     # 独立事务写盘, 避免嵌套 session
     save_skill(name, content, reason="rollback")
     return {"status": "rolled_back", "version_id": vid, "target_version": target}

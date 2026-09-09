@@ -119,6 +119,11 @@ class SkillEvolverUnitTests(unittest.TestCase):
             self.assertEqual(latest.reason, "auto_evolve")
             self.assertIn("Improved", latest.content)
 
+    def test_default_language_is_chinese(self):
+        """进化输出默认中文(与 skill_runner 一致), 防止升级后技能变英文."""
+        evolver = SkillEvolver(llm_client=MagicMock())
+        self.assertEqual(evolver.language, "zh")
+
     def test_evolver_skill_not_found(self):
         evolver = SkillEvolver(llm_client=self.mock_llm, skills_dir=self.tmpdir)
         with self.assertRaises(EvolutionError):

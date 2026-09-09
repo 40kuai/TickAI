@@ -1,402 +1,303 @@
 ---
-name: diagnose_prometheus_anomaly
-description: >-
-  通过 ARMS Prometheus 指标检查 nfc 系列服务的健康状态与运行异常，涵盖服务请求、
-  数据库、SQL、JVM、系统五个维度。当用户查询/巡检/诊断任何 nfc 服务的状态、健康、
-  监控、性能、异常、告警、数据库/JVM/GC/CPU 问题，或要求"检查/看一下 nfc 服务"
-  时，都必须使用本 skill 来完成查询与分析。
-trigger: user_initiated
-severity: info
+name: "diagnose_prometheus_anomaly"
+description: "Read-only diagnostic skill for nfc-* services. Use whenever the user asks to check, inspect, monitor, or diagnose the health/status/anomalies/performance of any nfc service (e.g. nfc-finance, nfc-fund, nfc-user-center), or mentions monitoring/巡检/health checks for nfc. Primary method: read-only Kubernetes inspection (list_k8s_contexts, check_k8s_deployments, check_k8s_pods, check_k8s_services, check_k8s_events, check_k8s_nodes). If ARMS/Prometheus metric tools (prometheus_service_discovery, prometheus_service_health, prometheus_metric_query) are present, extend the diagnosis with them. Never uses mutating commands."
+trigger: "user_initiated"
+severity: "info"
 ---
 
-# 业务异常诊断（Prometheus 指标）
+# Read-only Diagnosis of nfc SERVICE HEALTH AND Anomalies
 
 ## Goal
 
-当用户询问 nfc 系列服务的健康状态或异常情况时，按以下步骤依次检查各维度指标，
-定位异常并给出结构化报告。**本 skill 是 nfc 服务状态/监控巡检的唯一入口。**
+When the user asks about nfc service health, status, or anomalies, use only read-only Kubernetes inspection tools to determine the state of `nfc-*` workloads and produce a structured severity-sorted report. If ARMS/Prometheus metric tools are available in the current toolset, use them to complement the Kubernetes findings with request/database/SQL/JVM/system metrics. Never modify, exec into, or write to any cluster resource.
 
 ## When to use
 
-**只要用户的意图涉及 nfc 系列服务的状态、健康、监控、巡检或异常诊断，就立即使用本 skill，
-不要试图用其他通用工具或凭空回答。** 典型问法包括：
+Use this skill for ANY request that semantically asks about nfc service health or monitoring, including:
 
-- 用户问："看看 nfc 服务有什么异常"
-- 用户问："检查一下所有 nfc 服务的健康状态"
-- 用户问："nfc 系列有没有数据库异常"
-- 用户问："最近 nfc 服务有没有 GC 问题"
-- 用户问："Prometheus 上 nfc 系列服务有没有告警"
-- 用户问："帮我巡检一下 nfc 服务"
-- 用户问："nfc 服务状态怎么样 / 是否正常 / 有没有问题"
-- 用户问："查一下 nfc 服务的监控/指标/性能"
-- 用户问："nfc 某个服务是不是挂了 / 请求失败率如何"
-- 用户问："nfc 服务的 CPU / 内存 / JVM / GC / 慢 SQL / 网络 有没有异常"
-- 用户提到 "nfc"、"ARMS"、"Prometheus"、"arms_" 前缀指标、"巡检"、"健康检查"、"监控巡检" 等关键词
+- "看看 nfc 服务有什么异常" / "check nfc services for anomalies"
+- "检查一下所有 nfc 服务的健康状态" / "check health of all nfc services"
+- "nfc 系列有没有数据库/JVM/GC/CPU/内存问题"
+- "nfc 某个服务是不是挂了 / 请求失败率如何"
+- "nfc 服务状态怎么样 / 是否正常 / 有没有问题"
+- "查询 nfc 服务的监控/指标/性能 / Prometheus 上有没有告警"
+- "帮我巡检一下 nfc 服务" / "monitor nfc services"
+- Any mention of "nfc", "ARMS", "Prometheus", "巡检", "健康检查", "监控巡检" in the context of checking services
 
-**不要因为措辞变化（如"查一下"、"看下"、"检测"、"诊断"、"monitor"、"health"）而漏掉本 skill。
-只要语义是"nfc 服务健康/监控"，就调用 `run_skill(skill_name="diagnose_prometheus_anomaly")`。**
-
-## How to use the tools
+Do not skip the skill because of phrasing differences (e.g. "查一下", "看下", "检测", "diagnose", "health check"). If the semantics are "nfc service health/monitoring", run this skill.
 
-Prometheus 监控查询共 **3 个专用工具**，每个工具覆盖一个查询场景，**单次调用即可拿全所需指标**，避免多次调用消耗轮次：
+## Safety contract (read-only)
 
-1. **`prometheus_service_discovery`**（服务发现）：传 `service_prefix`（如 `"nfc-.*"`），返回该前缀下**实际存在的服务名列表**。巡检前先调用，确认要检查哪些服务。
-2. **`prometheus_service_health`**（服务健康快照，**核心工具**）：传 `service`（如 `"nfc-.*"` 或 `"nfc-finance"`），**一次调用并行查询** 服务请求(request)、数据库(database)、SQL、JVM、系统(system) **五个维度全部核心指标**，返回结构化健康快照。检查 nfc 服务健康/状态/异常时**必须**用这个模式，不要逐个指标查询。
-3. **`prometheus_metric_query`**（任意指标深度查询）：传 `query`（PromQL），执行范围查询（默认最近 10 分钟），用于健康快照发现某维度异常后**深入定位**具体指标的趋势/明细。
+This skill is strictly read-only. Allowed tools:
 
-**所有 Prometheus 相关查询都走这 3 个工具，不要发明或想象其它查询工具，不要用任意指标查询代替健康快照。**
+- `list_k8s_contexts`
+- `check_k8s_nodes`
+- `check_k8s_deployments`
+- `check_k8s_pods`
+- `check_k8s_services`
+- `check_k8s_events`
+- If present in the toolset: `prometheus_service_discovery`, `prometheus_service_health`, `prometheus_metric_query`
 
-**重要**：PromQL 中包含引号时，需要在 JSON 字符串中用反斜杠转义，例如：
-`avg(arms_db_requests_seconds_ign_rpc{service=~"nfc-.*"}) by(service)` 中的 `"nfc-.*"` 需要写作 `\"nfc-.*\"`。
+**Forbidden:**
 
-**注意**：查询结果中的 `metric` 字段包含标签信息（如 `service`、`serverIp` 等），`value` 字段是当前值。
+- Never use `kubectl exec`, `kubectl scale`, `kubectl edit`, `kubectl delete`, `kubectl patch`, `kubectl create`, or any other mutating command.
+- Never attempt to run `exec`, shell, or environment inspection inside a container.
+- Never guess or invent monitoring metrics or tool names that are not present.
+- Never recommend the user to "go check the Prometheus console yourself" — your job is to look and report.
 
-## ✅ 推荐流程（避免轮次耗尽）
+## Tool selection (read first)
 
-1. **先调用 `prometheus_service_discovery(service_prefix="nfc-.*")`** 确认 nfc 下实际存在的服务（若已明确目标服务可跳过）。
-2. **再调用一次 `prometheus_service_health(service="nfc-.*")`** 拿全五个维度的健康快照（22 条核心指标一次拿回）。
-3. 只有在快照发现某个维度异常、需要深入定位时，才再调用一次 `prometheus_metric_query` 并传 `query`（PromQL）补充查询。
-4. 这样通常 **2-3 次工具调用** 就能完成诊断并输出报告，不会触顶 `(max tool rounds reached)`。
+1. Inspect your available toolset. 
+2. If the three Prometheus/ARMS tools (`prometheus_service_discovery`, `prometheus_service_health`, `prometheus_metric_query`) are **present**, run the Prometheus extension described in Appendix A after completing the Kubernetes checks.
+3. If they are **absent**, do **not** mention or emulate PromQL. Use only the read-only Kubernetes workflow below.
 
-## ⚠️ VALID METRICS WHITELIST (READ THIS FIRST)
+## Time window
 
-**CRITICAL: You MUST ONLY use these exact metric names. Do NOT invent or guess metric names.**
+Use a recent time window of **last 10–15 minutes** for events and status. Do not request long historical data. If the user explicitly asks for a longer window, still only use data that the tools can read without extra permissions.
 
-### Service Request Metrics (服务请求指标)
-- `arms_app_requests_count_ign_destid_endpoint_parent_ppid_prpc_rpc` — 请求数
-- `arms_app_requests_error_count_ign_destid_endpoint_parent_ppid_prpc_rpc` — 错误请求数
-- `arms_app_requests_slow_count_ign_destid_endpoint_parent_ppid_prpc_rpc` — 慢请求数
-- `arms_app_requests_seconds_ign_destid_endpoint_parent_ppid_prpc_rpc` — 请求耗时
-- `arms_requests_by_status_count_ign_rpc` — 分状态码请求数
+## Step 0 — Context and service discovery
 
-### Database Metrics (数据库指标)
-- `arms_db_requests_count_ign_rpc` — 数据库请求数
-- `arms_db_requests_error_count_ign_rpc` — 数据库错误请求数
-- `arms_db_requests_slow_count_ign_rpc` — 数据库慢请求数
-- `arms_db_requests_seconds_ign_rpc` — 数据库请求耗时
+1. Call `list_k8s_contexts` to enumerate contexts.
+2. For each **reachable** context:
+   - Call `check_k8s_deployments` and `check_k8s_services`, looking for workloads whose names contain `nfc-` or whose labels include `app.kubernetes.io/name=nfc-*`, `app=nfc-*`, or similar.
+   - Collect: deployment name, namespace, image, replicas; service name, type, selector, ports.
+3. If no nfc-related resource is found in any reachable context, report: `"No nfc services found in the reachable contexts."` with `status: "no_data"` — do **not** say the services are healthy.
 
-### SQL Metrics (SQL指标)
-- `arms_sql_requests_count_ign_rpc` — SQL请求数
-- `arms_sql_requests_error_count_ign_rpc` — SQL错误请求数
-- `arms_sql_requests_slow_count_ign_rpc` — SQL慢请求数
-- `arms_sql_requests_seconds_ign_rpc` — SQL请求耗时
-- `arms_exception_requests_count_ign_destid_endpoint_rpc` — 异常请求数
-- `arms_exception_requests_seconds_ign_destid_endpoint_rpc` — 异常请求耗时
+If two contexts exist and one is unreachable (e.g. connection refused), list it as `contexts_unreachable` and continue with the reachable one(s). Never block the whole diagnosis because one context is down.
 
-### JVM Metrics (JVM指标)
-- `arms_jvm_gc_total` — 累计GC发生次数
-- `arms_jvm_gc_seconds_total` — 累计GC耗时
+## Step 1 — Deployment health
 
-### System Metrics (系统指标)
-- `arms_system_cpu_idle` — CPU空闲占比
-- `arms_system_cpu_io_wait` — IO Wait CPU占比
-- `arms_system_net_out_errs` — 网络出口错误
-- `arms_system_net_in_errs` — 网络入口错误
+For each nfc deployment, check:
 
-### ❌ NEVER USE THESE (FORBIDDEN)
-- `http_requests_total` — 通用 Prometheus 指标，ARMS 不存在
-- `arms_http_requests_count` — 不存在，正确名称是 `arms_requests_by_status_count_ign_rpc`
-- `up` — 通用 Prometheus 指标，ARMS 没有基础设施可用性指标
-- `node_*` — Node Exporter 指标，ARMS 不包含
-- 任何你自己编造的 `arms_*` 指标名
+- `spec.replicas` vs `status.availableReplicas` and `status.readyReplicas`.
+- `status.observedGeneration` vs `metadata.generation` (rollout progress).
+- Deployment conditions (e.g. `Available`, `Progressing`).
 
-### How to check if a service is "up"
-ARMS 没有 `up` 指标。要检查服务是否存活，使用以下方法：
-1. 查询 `arms_system_cpu_idle{service=~"SERVICE_FILTER"}` — 如果有数据返回，说明服务在运行
-2. 查询 `arms_app_requests_count_ign_destid_endpoint_parent_ppid_prpc_rpc{service=~"SERVICE_FILTER"}` — 如果有请求数，说明服务在工作
-3. 如果以上查询都返回空，说明该服务当前没有上报数据
+Anomaly rules:
 
-## Service name handling
+| Condition | Severity |
+|---|---|
+| `availableReplicas < spec.replicas` | `critical` if 0 ready, else `warning` |
+| `observedGeneration < generation` (rollout stuck/not progressing) | `warning` |
+| Deployment condition `Available=False` | `critical` if no available replicas, else `warning` |
+| Deployment condition `Progressing=False` (rollout stalled) | `warning` |
 
-**不要依赖用户输入的服务名。** 用户可能不知道确切的服务名，或者使用了简写。
+Record `current_value` like `"2/3"` (ready/desired) and `expected_value` like `"3/3"`.
 
-第一步永远是查询 `arms_db_requests_seconds_ign_rpc{service=~"nfc-.*"}` 来获取所有有数据库请求的 nfc 服务名列表。
-然后使用这个列表作为基准，在所有后续检查中只查询这些已知存在的服务。
+## Step 2 — Pod health
 
-如果有服务只有系统指标（CPU、JVM）但没有数据库指标，它不会出现在这个列表中。
-这种情况下可以先用 `arms_system_cpu_idle{service=~"nfc-.*"}` 兜底获取服务列表。
+Call `check_k8s_pods` for nfc pods (filter by name or label, all namespaces if needed). For each pod with a name matching `nfc-*`, examine:
 
-## Checking steps
+1. **Pod phase / container states:**
+   - `CrashLoopBackOff` → `critical`
+   - `ImagePullBackOff` / `ErrImagePull` → `critical`
+   - `CreateContainerConfigError` or `CreateContainerError` → `critical` (likely missing ConfigMap/Secret/env)
+   - `Pending` → `warning` (may be scheduling or resource related)
+   - `Terminating` for more than 5 minutes → `warning`
+   - `Running` but not ready → `critical` if no other ready replica, else `warning`
+2. **Restart counts:** each container’s `restartCount`. Repeated restarts (>0 in the window) with last termination reason `OOMKilled` → `critical`; other repeated restarts → `warning`.
+3. **Last terminated state:** record reason (Error, OOMKilled, etc.) as evidence.
 
-按以下顺序依次检查，发现异常立即记录，继续下一个检查。
+For each anomalous pod, capture:
+- `resource`: `namespace/pod`
+- `container` name
+- `current_value`: `RestartCount=5, LastState=CrashLoopBackOff`
+- `expected_value`: `Running and Ready`
 
-**首先调用一次 `prometheus_service_discovery(service_prefix="nfc-.*")` 获取服务列表，
-再调用一次 `prometheus_service_health(service="nfc-.*")` 获取全部五个维度的健康快照，
-然后基于快照结果按下述维度分析。只有快照显示某维度有异常时，才再次调用
-`prometheus_metric_query` 并传 `query`（PromQL）深入定位。**
+## Step 3 — Service / endpoint health
 
----
+Call `check_k8s_services` for services named `nfc-*`. For each service:
 
-## ⏱️ 默认时间范围与查询性能（重要，先读）
+- Check `type` (ClusterIP/NodePort/LoadBalancer).
+- Check whether the service selector matches the labels on the nfc pods.
+- Check for ready endpoints:
+  - If the service has no ready backend endpoints while nfc pods exist but are not Ready → `critical` (no traffic path).
+  - If there are ready endpoints → `normal`.
+- If a LoadBalancer is used but the external IP is not assigned (`<pending>`) → `warning`.
 
-- **默认只查最近 10 分钟的数据。** `prometheus_service_health` 不传 `start`/`end` 时自动用最近 10 分钟。除非用户明确要求更长时间，否则**不要**指定更大的时间范围。
-- **控制查询数量，减少轮次：**
-  - 快照模式一次调用即可覆盖全部维度，不要逐个指标查询。
-  - 只有快照发现异常时才做深入查询；发现异常立即报告，不要等全部跑完。
-  - 不要对同一数据重复查询。
-- **发现首个关键异常（critical）就直接汇总报告**，不要继续跑完所有检查。
-- 若连续多次查询返回空/超时，停止查询并如实说明"数据不可得"，不要反复重试。
+## Step 4 — Events
 
----
+Call `check_k8s_events` and filter for nfc-related resources in the last 10–15 minutes. Look for:
 
-### Step 0: 发现服务
+- `FailedScheduling` (resource shortage / node selectors / taints)
+- `Unhealthy` (liveness/readiness probe failures)
+- `BackOff` / `CrashLoopBackOff` (container restarts)
+- `OOMKilling`
+- `FailedMount` (volume/config errors)
+- `Pulling` → `Pulled` (image issues)
 
-在所有检查之前，**调用 `prometheus_service_discovery(service_prefix="nfc-.*")`**，
-从返回的 `services` 列表确认实际存在的服务名，作为后续检查的服务列表基础。
+Use the most recent events as evidence in the report. Do not report stale events outside the window.
 
-如果返回的服务列表为空，说明该前缀下当前没有上报数据的服务，直接返回"未发现 nfc 服务数据"。
+## Step 5 — Node / system health (when relevant)
 
-从结果中提取服务名列表，例如：`["nfc-finance", "nfc-fund", "nfc-user-center", ...]`。
+Call `check_k8s_nodes` to understand node-level context:
 
-后续健康快照的 `service` 过滤统一使用 `nfc-.*` 通配，不需要逐个服务查询。
-如果快照结果中某个服务有数据而其他服务没有，属于正常现象（不同服务可能上报不同指标）。
+- `NotReady` condition → `warning`/`critical` depending on impact.
+- `MemoryPressure`, `DiskPressure`, `PIDPressure` → `warning`.
+- If nfc pods are `Pending` with `FailedScheduling` events, attribute the cause (resource requests vs node allocatable) to the node pressure.
 
----
+This step is optional if pods/deployments already show a clear anomaly, but include it when the anomaly is `Pending` or when OOM/restarts suggest resource limits.
 
-### Step 1: 服务请求异常
+## Step 6 — Synthesize and report
 
-#### 1.1 服务错误请求百分比
+Map findings to categories:
 
-**PromQL:**
-```
-sum(sum_over_time_lorc(arms_app_requests_error_count_ign_destid_endpoint_parent_ppid_prpc_rpc{service=~"SERVICE_FILTER",callKind=~"http|rpc|consumer|custom_entry|server"}[1m])) by(service,callKind) / sum(sum_over_time_lorc(arms_app_requests_count_ign_destid_endpoint_parent_ppid_prpc_rpc{service=~"SERVICE_FILTER",callKind=~"http|rpc|consumer|custom_entry|server"}[1m])) by(service,callKind)
-```
+- `deployment_availability`
+- `pod_status`
+- `service_endpoints`
+- `configuration`
+- `resource_pressure`
+- `events`
 
-**阈值：** >= 0.10（10%）
+Severity assignment:
 
-**说明：** 检查各服务 + 调用类型的错误请求占比。超过 10% 视为异常。
+| Severity | Criteria |
+|---|---|
+| `critical` | CrashLoopBackOff, ImagePullBackOff, CreateContainerConfigError, OOMKilled, no available replicas, no ready endpoints, readiness failing on all replicas |
+| `warning` | restarts > 0 but service still serving, rollout stuck, not-ready pod with other ready replicas, node pressure, unmounted volumes, Pending pods |
+| `info` | any other noteworthy observation (e.g. image tag `latest`, single replica without HPA) |
+| `normal` | only when there is actual data proving the resource is fine |
+| `no_data` | empty result — never call it normal |
 
-#### 1.2 HTTP 状态码 200 占比
-
-**PromQL:**
-```
-sum(arms_requests_by_status_count_ign_rpc{service=~"SERVICE_FILTER",status="200"}) by(service) / sum(arms_requests_by_status_count_ign_rpc{service=~"SERVICE_FILTER"}) by(service)
-```
-
-**阈值：** <= 0.90（90%）
-
-**说明：** HTTP 请求中 200 状态码比例低于 90% 说明异常响应增多。
-
-#### 1.3 慢请求数
-
-**PromQL:**
-```
-sum(arms_app_requests_slow_count_ign_destid_endpoint_parent_ppid_prpc_rpc{service=~"SERVICE_FILTER"}) by(service)
-```
-
-**说明：** 检查慢请求的绝对数量。如果 > 0 且数量较大，说明服务存在性能瓶颈。
-
----
-
-### Step 2: 数据库异常
-
-#### 2.1 数据库请求耗时
-
-**PromQL:**
-```
-avg(arms_db_requests_seconds_ign_rpc{service=~"SERVICE_FILTER"}) by(service, callKind, endpoint, destId)
-```
-
-**阈值：** >= 5（秒）
-
-**说明：** 数据库平均请求耗时超过 5 秒视为异常。检查具体是哪个 endpoint 和 destId。
-
-#### 2.2 数据库错误百分比
-
-**PromQL:**
-```
-sum(arms_sql_requests_error_count_ign_rpc{service=~"SERVICE_FILTER"}) by(service, callKind, endpoint) / sum(arms_sql_requests_count_ign_rpc{service=~"SERVICE_FILTER"}) by(service, callKind, endpoint)
-```
-
-**阈值：** >= 0.05（5%）
-
-#### 2.3 SQL 慢请求
-
-**PromQL:**
-```
-sum(arms_sql_requests_slow_count_ign_rpc{service=~"SERVICE_FILTER"}) by(service, endpoint, destId)
-```
-
-**说明：** 慢 SQL 数量 > 0 说明需要关注 SQL 执行效率。
-
----
-
-### Step 3: JVM 异常
-
-#### 3.1 Young GC 频率
-
-**PromQL:**
-```
-avg(irate(arms_jvm_gc_total{service=~"SERVICE_FILTER",gen="young"}[1m])) by(service, serverIp)
-```
-
-**阈值：** >= 5（次/分钟）
-
-**说明：** Young GC 超过 5 次/分钟可能说明对象分配过快或新生代偏小。
-
-#### 3.2 Old GC 频率
-
-**PromQL:**
-```
-avg(irate(arms_jvm_gc_total{service=~"SERVICE_FILTER",gen="old"}[1m])) by(service, serverIp)
-```
-
-**阈值：** >= 0.05（次/分钟）
-
-**说明：** Old GC 超过 0.05 次/分钟（即每 20 分钟 1 次以上）说明老年代增长过快。
-
-#### 3.3 Young GC 耗时
-
-**PromQL:**
-```
-avg(increase(arms_jvm_gc_seconds_total{service=~"SERVICE_FILTER",gen="young"}[1m])) by(service, serverIp)
-```
-
-**阈值：** >= 8（秒）
-
-**说明：** Young GC 每分钟耗时超过 8 秒说明 GC 停顿时间过长。
-
-#### 3.4 Old GC 耗时
-
-**PromQL:**
-```
-avg(increase(arms_jvm_gc_seconds_total{service=~"SERVICE_FILTER",gen="old"}[1m])) by(service, serverIp)
-```
-
-**阈值：** >= 3（秒）
-
-**说明：** Old GC 每分钟耗时超过 3 秒说明 Full GC 停顿严重。
-
-#### 3.5 异常请求数
-
-**PromQL:**
-```
-sum(arms_exception_requests_count_ign_destid_endpoint_rpc{service=~"SERVICE_FILTER"}) by(service, endpoint)
-```
-
-**说明：** 检查服务抛出的异常数量。如果 > 0，说明代码存在未捕获异常。
-
----
-
-### Step 4: 系统异常
-
-#### 4.1 CPU 空闲占比
-
-**PromQL:**
-```
-avg(arms_system_cpu_idle{service=~"SERVICE_FILTER"}) by(service)
-```
-
-**阈值：** <= 20（%）
-
-**说明：** CPU 空闲率低于 20% 说明 CPU 资源紧张。
-
-#### 4.2 IO Wait CPU 占比
-
-**PromQL:**
-```
-avg(arms_system_cpu_io_wait{service=~"SERVICE_FILTER"}) by(service)
-```
-
-**阈值：** >= 1（%）
-
-**说明：** IO Wait 超过 1% 说明磁盘 IO 可能存在瓶颈。
-
-#### 4.3 网络出口错误
-
-**PromQL:**
-```
-sum(arms_system_net_out_errs{service=~"SERVICE_FILTER"}) by(service)
-```
-
-**阈值：** > 0
-
-**说明：** 网络出口错误 > 0 说明服务出方向网络存在问题。
-
-#### 4.4 网络入口错误
-
-**PromQL:**
-```
-sum(arms_system_net_in_errs{service=~"SERVICE_FILTER"}) by(service)
-```
-
-**阈值：** > 0
-
-**说明：** 网络入口错误 > 0 说明服务入方向网络存在问题。
-
----
+**Report early:** if a `critical` anomaly is found, proceed to finish a concise report as soon as the critical items are confirmed; do not run every possible check if the critical evidence is already compelling. Aim for 2–4 tool calls minimum, then produce the report.
 
 ## Output format
 
-将检查结果组织为结构化报告，按严重程度排序输出。
+Return a single JSON object using lowercase keys; any free-form `message`/`suggestion` may be in the user’s language or English, but keep technical fields (`namespace`, `pod`, `resource`, `category`, `severity`) as identifiers.
 
 ```json
 {
-  "service": "nfc-finance",
-  "checked_at": "2026-07-23T10:00:00Z",
+  "skill": "diagnose_prometheus_anomaly",
+  "checked_at": "2026-08-26T12:00:00Z",
+  "scope": {
+    "contexts_checked": ["docker-desktop"],
+    "contexts_unreachable": [],
+    "namespaces": ["default", "nfc"],
+    "nfc_services_found": ["nfc-finance", "nfc-fund", "nfc-user-center"]
+  },
   "summary": {
-    "total_checks": 12,
-    "anomalies_found": 3,
-    "severity": "warning"
+    "total_checks": 8,
+    "anomalies_found": 2,
+    "severity": "critical"
   },
   "anomalies": [
     {
-      "category": "service_request",
-      "check_name": "错误请求百分比",
-      "service": "nfc-finance",
-      "call_kind": "http",
-      "current_value": 0.15,
-      "threshold": 0.10,
-      "unit": "percent(0.0-1.0)",
+      "category": "pod_status",
+      "check_name": "CrashLoopBackOff",
+      "resource": "default/nfc-finance-5f7c9d8b6c",
+      "namespace": "default",
+      "pod": "nfc-finance-5f7c9d8b6c",
+      "container": "app",
+      "current_value": "CrashLoopBackOff, restartCount=7",
+      "expected_value": "Running and Ready",
       "severity": "critical",
-      "message": "nfc-finance 服务 HTTP 错误请求占比 15%，超过阈值 10%",
-      "suggestion": "检查最近是否有代码变更上线，查看对应 endpoint 的日志定位错误原因"
+      "message": "nfc-finance pod enters CrashLoopBackOff with repeated restarts.",
+      "suggestion": "Verify the container environment (env vars, ConfigMap, Secret) and readiness probe configuration; check startup logs if available.",
+      "evidence": [
+        "event: BackOff backing off restarting failed container",
+        "lastState.terminated.reason=Error"
+      ]
+    },
+    {
+      "category": "deployment_availability",
+      "check_name": "availableReplicas",
+      "resource": "deployment/nfc-finance",
+      "namespace": "default",
+      "current_value": "0/1",
+      "expected_value": "1/1",
+      "severity": "critical",
+      "message": "nfc-finance has 0 available replicas.",
+      "suggestion": "Inspect the crashing container's configuration and image; check recent rollouts.",
+      "evidence": ["status.availableReplicas=0"]
     }
   ],
   "normal_checks": [
     {
-      "category": "jvm",
-      "check_name": "Young GC 频率",
-      "service": "nfc-finance",
-      "current_value": 2.1,
-      "threshold": 5.0,
-      "unit": "次/分钟",
-      "status": "normal"
+      "category": "deployment_availability",
+      "check_name": "availableReplicas",
+      "resource": "deployment/nfc-user-center",
+      "namespace": "default",
+      "current_value": "3/3",
+      "expected_value": "3/3",
+      "severity": "normal"
+    }
+  ],
+  "no_data_checks": [
+    {
+      "category": "service_endpoints",
+      "check_name": "endpoints_ready",
+      "resource": "service/nfc-camunda-company",
+      "namespace": "default",
+      "current_value": "no endpoint data",
+      "expected_value": "ready endpoints present",
+      "severity": "no_data"
     }
   ]
 }
 ```
 
-### 严重级别定义
-
-| 级别 | 说明 |
-|------|------|
-| `critical` | 正在影响用户或有资金损失风险，需要立即处理 |
-| `warning` | 指标异常但尚未影响用户，需要关注 |
-| `info` | 仅作信息参考，无需立即处理 |
-| `normal` | 指标正常 |
-
-### 严重级别分配规则
-
-- **critical**: 服务错误请求百分比 >= 10%、数据库耗时 >= 5s、HTTP 200 占比 <= 90%
-- **warning**: Old GC 频率/耗时异常、IO Wait 异常、网络错误
-- **info**: Young GC 频率/耗时异常、CPU 空闲低
-- **normal**: 所有指标在阈值范围内
+If no anomalies are found and all checks have real data, set `summary.anomalies_found` to `0` and `summary.severity` to `"normal"`.
 
 ## Edge cases
 
-- **指标无数据（空结果）：** 标记为 `status: "no_data"`，说明可能是服务刚部署或指标采集延迟，不要误报为正常
-- **Step 0 发现服务为空：** 如果 `arms_db_requests_seconds_ign_rpc` 和 `arms_system_cpu_idle` 都返回空，说明当前 Prometheus 实例中没有 nfc 系列服务数据，直接返回"未发现 nfc 服务数据"
-- **多个 serverIp 的结果：** 对于 JVM 和系统指标，同一个服务可能有多个实例（serverIp）。如果某一台异常而其他正常，应单独指出具体 IP
-- **查询超时：** 复杂 PromQL 可能超时。如果遇到超时可尝试缩小时间范围（默认最近 10 分钟即可）或简化查询条件。若同一查询连续超时/失败 2 次以上，跳过该检查并如实说明，不要反复重试。
-- **查询报错/返回空：** 单个查询失败不要中止整个 skill，先记录，继续下一个维度；但不要对同一个指标反复重试。
-- **结果被截断：** 工具返回的结果如果超过 20 条会被截断。如果发现 `truncated: true`，应缩小查询范围重新查询
+- **Unreachable context:** include it in `contexts_unreachable`; do not invent data. If **no** context is reachable, return a short report stating `"All contexts unreachable"` with `no_data`.
+- **No nfc resources:** return `scope.nfc_services_found: []` and `summary.severity: "info"` with message `"No nfc services found in reachable contexts"`. Do **not** call it normal.
+- **Tool missing:** if a listed tool is not available, only use the available read-only tools and state which checks could not be performed. Never fabricate outputs.
+- **Multiple namespaces:** always include `namespace` in `resource` and in `evidence`.
+- **Only some replicas bad:** distinguish per-pod/per-node anomalies; do not mark the entire deployment critical if the service still has ready replicas.
+- **Empty pod list with deployments present:** report `no_data` and suggest checking the namespace or label selector; do not say healthy.
+- **Language:** Always execute the diagnostic. Never ask the user to clarify the language or to translate anything. Answer in the user’s own language if that language is other than English.
 
 ## What NOT to do
 
-- **不要** 对空结果下结论说"指标正常" —— 空结果可能是无数据，而不是正常
-- **不要** 一次性把所有查询跑完 —— 发现一个异常就先报告，不要让用户等
-- **不要** 修改 PromQL 模板中的指标名 —— 指标名是固定的，只能修改 service 过滤条件
-- **不要** 建议用户去 Prometheus 页面查看 —— 你的任务就是代替用户查询和分析
-- **不要** 对每个指标都做范围查询 —— 优先用即时查询，只在需要看趋势时才用范围查询
-- **不要** 为了"完整"跑完所有检查而反复查询 —— 目标是在最近 10 分钟内快速定位异常；每维度最多 1 条查询，发现 critical 即报告
+- Do **not** ask "what do you want me to translate?" or request clarification about the request language.
+- Do **not** use `kubectl exec`, `logs -f`, attach, or any interactive/mutating command.
+- Do **not** report "normal" for an empty result; use `no_data`.
+- Do **not** run the Prometheus path if the Prometheus tools are absent.
+- Do **not** invent metrics, PromQL, or `arms_*` definitions when the metric tools are unavailable.
+- Do **not** run every check exhaustively if a `critical` anomaly is already confirmed — report promptly.
+- Do **not** advise the user to check the console themselves; provide your own findings.
+
+## Appendix A — Prometheus/ARMS extension (only if tools are present)
+
+If the following tools are **actually present** in your toolset:
+
+- `prometheus_service_discovery(service_prefix=...)`
+- `prometheus_service_health(service=...)`
+- `prometheus_metric_query(query=...)`
+
+Then after the Kubernetes workflow, additionally run:
+
+1. `prometheus_service_discovery(service_prefix="nfc-.*")` to confirm service list.
+2. `prometheus_service_health(service="nfc-.*")` to fetch five dimension snapshots (request, database, SQL, JVM, system) in one call.
+3. Only if an anomaly appears in the snapshot, run `prometheus_metric_query` with a PromQL string to zoom in. Default time window: last 10 minutes.
+
+Allowed metric names (do not invent others):
+
+- Request: `arms_app_requests_count_ign_destid_endpoint_parent_ppid_prpc_rpc`, `arms_app_requests_error_count_ign_destid_endpoint_parent_ppid_prpc_rpc`, `arms_app_requests_slow_count_ign_destid_endpoint_parent_ppid_prpc_rpc`, `arms_app_requests_seconds_ign_destid_endpoint_parent_ppid_prpc_rpc`, `arms_requests_by_status_count_ign_rpc`
+- Database/SQL: `arms_db_requests_count_ign_rpc`, `arms_db_requests_error_count_ign_rpc`, `arms_db_requests_slow_count_ign_rpc`, `arms_db_requests_seconds_ign_rpc`, `arms_sql_requests_count_ign_rpc`, `arms_sql_requests_error_count_ign_rpc`, `arms_sql_requests_slow_count_ign_rpc`, `arms_sql_requests_seconds_ign_rpc`, `arms_exception_requests_count_ign_destid_endpoint_rpc`, `arms_exception_requests_seconds_ign_destid_endpoint_rpc`
+- JVM: `arms_jvm_gc_total`, `arms_jvm_gc_seconds_total`
+- System: `arms_system_cpu_idle`, `arms_system_cpu_io_wait`, `arms_system_net_out_errs`, `arms_system_net_in_errs`
+
+Never use `http_requests_total`, `up`, `node_*`, or any invented `arms_*` metric.
+
+Severity mapping for metric anomalies:
+
+| Check | Threshold | Severity |
+|---|---|---|
+| error request ratio | ≥ 0.10 | critical |
+| HTTP 200 ratio | ≤ 0.90 | critical |
+| DB latency | ≥ 5s | critical |
+| DB/SQL error ratio | ≥ 0.05 | warning |
+| slow SQL count > 0 | > 0 | warning |
+| old GC freq | ≥ 0.05/min | warning |
+| old GC duration | ≥ 3s | warning |
+| IO wait | ≥ 1% | warning |
+| network errors | > 0 | warning |
+| young GC freq | ≥ 5/min | info |
+| young GC duration | ≥ 8s | info |
+| CPU idle | ≤ 20% | info |
+
+If Prometheus data returns empty for a service, mark that service’s checks as `no_data`, not `normal`.
+
+Merge the Kubernetes findings and Prometheus findings into one final JSON report using the output format above. The `skill` field remains `"diagnose_prometheus_anomaly"`.
