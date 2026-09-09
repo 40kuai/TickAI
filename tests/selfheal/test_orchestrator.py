@@ -44,6 +44,11 @@ class RunLowRiskDiskTests(_SelfHealTestCase):
         os.environ["SELFHEAL_LOG_PATH_WHITELIST"] = "/var/log/nginx/access.log"
         config.reload_config()
 
+    def tearDown(self):
+        # 清理方法内设置的服务白名单, 防跨用例污染
+        os.environ.pop("SELFHEAL_SERVICE_WHITELIST", None)
+        config.reload_config()
+
     def test_low_risk_auto_execute_and_verify_success(self):
         # 探测 85%(低危区间) + AI 判定 auto + 影响面已确认(单文件) → 自动执行 truncate_log → 验证 70% < 80 → verified
         import hermes.selfheal.approval as approval_mod
@@ -128,6 +133,37 @@ class RunLowRiskDiskTests(_SelfHealTestCase):
             exec_json = json.loads(row.execution_result)
             self.assertEqual(exec_json["exit_code"], 1)
             self.assertIn("nginx.service could not be found", exec_json["stderr"])
+
+    def test_probe_inactive_service_continues_selfheal(self):
+        # process_restart: systemctl is-active 对 inactive 服务返回 exit≠0, 这是"服务异常"信号
+        # 而非探测失败 → 应继续自愈(审批/执行), 而不是落 failed
+        os.environ["SELFHEAL_SERVICE_WHITELIST"] = "nginx"
+        config.reload_config()
+        import hermes.selfheal.approval as approval_mod
+
+        def _fake_judge(payload):
+            return {"risk_score": 5, "recommendation": "approval", "reasons": ["服务未运行, 需确认重启"]}
+
+        with patch.object(approval_mod, "_default_judge", side_effect=_fake_judge):
+            with _mock_exec([{"success": False, "exit_code": 3,
+                              "stdout": "inactive", "stderr": ""}]):
+                result = orchestrator.run_selfheal(
+                    1, "process_restart", {"service": "nginx"}, "user")
+        self.assertNotEqual(result["status"], "failed")
+        self.assertEqual(result["status"], "pending")
+        self.assertIn("需人工审批", result["message"])
+
+    def test_probe_unknown_unit_returns_clear_failure(self):
+        # systemctl is-active 输出 unknown(单元不存在) → failed 且 reason 语义化提示
+        os.environ["SELFHEAL_SERVICE_WHITELIST"] = "nginx"
+        config.reload_config()
+        with _mock_exec([{"success": False, "exit_code": 3,
+                          "stdout": "unknown", "stderr": ""}]):
+            result = orchestrator.run_selfheal(
+                1, "process_restart", {"service": "nginx"}, "user")
+        self.assertEqual(result["status"], "failed")
+        self.assertIn("未找到", result["reason"])
+        self.assertIn("unknown", result["reason"])
 
     def test_exec_failure_returns_failed_and_persists(self):
         # 探测 85% + AI 判定 auto → 执行失败(exec_ssh success=False) → status=failed 且落库失败记录

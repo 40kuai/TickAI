@@ -114,23 +114,34 @@ def _run(
     probe_cmd = detect.probe_command(scene, target)
     probe = actions.exec_ssh(server_id, probe_cmd)
     if not probe["success"]:
-        # 探测失败: 完整记录 exit_code/stderr/stdout, 供问题可查(避免仅 "探测失败: None")
-        execution = {"error": probe.get("error"),
-                     "exit_code": probe.get("exit_code"),
-                     "stderr": probe.get("stderr"),
-                     "stdout": probe.get("stdout")}
-        record = _persist(server_id, scene, target, "low", action_name, "failed",
-                          triggered_by, execution=execution,
-                          rendered_command=None)
-        detail = next((str(p).strip() for p in
-                       (probe.get("error"), probe.get("stderr"), probe.get("stdout"))
-                       if p), "未知原因")
-        suffix = ""
-        if probe.get("exit_code") is not None and "exit_code=" not in detail:
-            suffix = f" [exit_code={probe['exit_code']}]"
-        return {"severity": "low", "status": "failed", "success": False,
-                "action_id": record.id, "action_name": action_name,
-                "reason": f"探测失败: {detail}{suffix}"}
+        probe_out = (probe.get("stdout") or "").strip().lower()
+        # process_restart: systemctl is-active 对 inactive/failed 单元返回 exit≠0,
+        # 这是"服务异常"信号而非探测失败 → 继续自愈(重启); unknown 表示单元不存在 → 明确拒绝
+        if scene == "process_restart" and probe_out in (
+                "inactive", "failed", "deactivating", "activating"):
+            pass
+        else:
+            if scene == "process_restart" and probe_out == "unknown":
+                hint = (f"systemctl 未找到服务 {target.get('service')}（输出 unknown）: "
+                        "可能未安装或非 systemd 管理")
+            else:
+                hint = next((str(p).strip() for p in
+                             (probe.get("error"), probe.get("stderr"),
+                              probe.get("stdout")) if p), "未知原因")
+            # 探测失败: 完整记录 exit_code/stderr/stdout, 供问题可查(避免仅 "探测失败: None")
+            execution = {"error": probe.get("error"),
+                         "exit_code": probe.get("exit_code"),
+                         "stderr": probe.get("stderr"),
+                         "stdout": probe.get("stdout")}
+            record = _persist(server_id, scene, target, "low", action_name, "failed",
+                              triggered_by, execution=execution,
+                              rendered_command=None)
+            suffix = ""
+            if probe.get("exit_code") is not None and "exit_code=" not in hint:
+                suffix = f" [exit_code={probe['exit_code']}]"
+            return {"severity": "low", "status": "failed", "success": False,
+                    "action_id": record.id, "action_name": action_name,
+                    "reason": f"探测失败: {hint}{suffix}"}
 
     metric = _probe_metric(scene, target, probe["stdout"])
     is_abnormal = (
