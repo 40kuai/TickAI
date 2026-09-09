@@ -58,6 +58,10 @@ function approvalReasons(a) {
     return null
   }
 }
+
+// 待我审批(pending) / 历史(非 pending), 按现有 actions 顺序
+const pendingActions = computed(() => actions.value.filter((a) => a.status === 'pending'))
+const historyActions = computed(() => actions.value.filter((a) => a.status !== 'pending'))
 function actionLabel(name) {
   return ACTION_LABELS[name] || name || '-'
 }
@@ -246,19 +250,10 @@ function fmtTarget(v) {
   }
 }
 
-// ====== 日志清理(通道一固定脚本 + 通道二AI分析) ======
-const CLEANUP_CATEGORIES = [
-  { value: 'system', label: '系统日志' },
-  { value: 'service', label: '服务日志 /data/*/logs' },
-  { value: 'docker-log', label: 'Docker 日志' },
-  { value: 'docker-prune', label: 'Docker 容器/镜像回收' },
-  { value: 'all', label: '全部' },
-]
-const cleanupRunning = ref(false)
+// ====== 日志清理向导 ======
 const scanRunning = ref(false)
 const scanResult = ref(null)
 const scanError = ref('')
-const aiPlanRunning = ref(false)
 
 // ====== 日志清理向导: 勾选状态 + 策略生成 ======
 // 勾选状态: Map<selectionKey, {type, params, label, risk}>
@@ -287,6 +282,11 @@ const KIND_LABELS = {
 const KIND_RISKS = {
   truncate_file: 'low',
   docker_log_truncate: 'medium',
+}
+// 清理方式 tooltip 说明(spec 4.3-⑤)
+const KIND_HINTS = {
+  truncate_file: '将该文件安全清空（保留文件本身）',
+  docker_log_truncate: '截断 Docker 容器 json.log',
 }
 
 function selKey(row) {
@@ -518,7 +518,7 @@ onMounted(loadAll)
     <div class="page-head">
       <div>
         <h2 class="page-title">自愈中心</h2>
-        <p class="page-sub">查看自愈统计、手动触发自愈闭环并审批高危动作</p>
+        <p class="page-sub">查看自愈统计、按场景触发自愈闭环并审批高危动作</p>
       </div>
       <button class="btn btn-outline" :disabled="loading" @click="loadAll">刷新</button>
     </div>
@@ -574,179 +574,127 @@ onMounted(loadAll)
             选择服务器后点击扫描，查看磁盘水位并勾选要清理的项
           </div>
           <div v-if="scanError" class="error-tip">{{ scanError }}</div>
-      <!-- 扫描结果(结构化) -->
-      <div v-if="scanResult" class="wizard-result">
-        <div class="result-head">
-          <span class="result-title">扫描结果（只读）</span>
-          <button class="result-close" @click="scanResult = null">×</button>
-        </div>
-        <div class="wizard-body">
-          <!-- 磁盘使用率 -->
-          <div v-if="diskMounts.length" class="disk-cards">
-            <div v-for="[mount, info] in diskMounts" :key="mount" class="disk-card" :class="'disk-' + diskTone(info.use_pct)">
-              <span class="disk-mount">{{ mount }}</span>
-              <span class="disk-pct">{{ info.use_pct }}%</span>
-              <span class="disk-detail">已用 {{ info.used }} / 可用 {{ info.avail }}</span>
+          <!-- 扫描结果(结构化) -->
+          <div v-if="scanResult" class="wizard-result">
+            <div class="result-head">
+              <span class="result-title">扫描结果（只读）</span>
+              <button class="result-close" @click="scanResult = null">×</button>
             </div>
-          </div>
+            <div class="wizard-body">
+              <!-- 磁盘使用率 -->
+              <div v-if="diskMounts.length" class="disk-cards">
+                <div v-for="[mount, info] in diskMounts" :key="mount" class="disk-card" :class="'disk-' + diskTone(info.use_pct)">
+                  <span class="disk-mount">{{ mount }}</span>
+                  <span class="disk-pct">{{ info.use_pct }}%</span>
+                  <span class="disk-detail">已用 {{ info.used }} / 可用 {{ info.avail }}</span>
+                </div>
+              </div>
 
-          <!-- 大文件清单(tab) -->
-          <div v-if="varLogRows.length || serviceLogRows.length || dockerLogRows.length" class="file-section">
-            <div class="file-tabs">
-              <button
-                v-for="t in FILE_TABS"
-                :key="t.key"
-                class="file-tab"
-                :class="{ active: fileTab === t.key }"
-                @click="fileTab = t.key"
-              >
-                {{ t.label }}（{{ rowsForTab(t.key).length }}）
-              </button>
-            </div>
-            <div class="file-list">
-              <label v-for="row in activeFileRows" :key="selKey(row)" class="file-row">
-                <input type="checkbox" :checked="isSelected(selKey(row))" @change="toggleFile(row)" />
-                <span class="file-path" :title="row.path">{{ row.path }}</span>
-                <span class="file-size">{{ row.size_mb }} MB</span>
-                <span class="badge" :class="KIND_RISKS[row.kind] === 'high' ? 'badge-danger' : 'badge-warning'">
-                  {{ KIND_LABELS[row.kind] }}
-                </span>
-              </label>
-            </div>
-          </div>
+              <!-- 大文件清单(tab) -->
+              <div v-if="varLogRows.length || serviceLogRows.length || dockerLogRows.length" class="file-section">
+                <div class="file-tabs">
+                  <button
+                    v-for="t in FILE_TABS"
+                    :key="t.key"
+                    class="file-tab"
+                    :class="{ active: fileTab === t.key }"
+                    @click="fileTab = t.key"
+                  >
+                    {{ t.label }}（{{ rowsForTab(t.key).length }}）
+                  </button>
+                </div>
+                <div class="file-list">
+                  <label v-for="row in activeFileRows" :key="selKey(row)" class="file-row">
+                    <input type="checkbox" :checked="isSelected(selKey(row))" @change="toggleFile(row)" />
+                    <span class="file-path" :title="row.path">{{ row.path }}</span>
+                    <span class="file-size">{{ row.size_mb }} MB</span>
+                    <span class="badge" :class="KIND_RISKS[row.kind] === 'high' ? 'badge-danger' : 'badge-warning'" :title="KIND_HINTS[row.kind]">
+                      {{ KIND_LABELS[row.kind] }}
+                    </span>
+                  </label>
+                </div>
+              </div>
 
-          <!-- journald -->
-          <div v-if="scanResult.journal && scanResult.journal.disk_used" class="residue-row">
-            <label class="residue-label">
-              <input type="checkbox" :checked="isSelected('journal')" @change="toggleJournal" />
-              journald 占用 <code>{{ scanResult.journal.disk_used }}</code>
-              <span class="residue-desc">→ 压缩为</span>
-              <input v-model.number="journalSize" type="number" min="1" max="10000" class="journal-size" />
-              <span class="residue-desc">MB</span>
-              <span class="badge badge-warning">低危</span>
-            </label>
-          </div>
+              <!-- journald -->
+              <div v-if="scanResult.journal && scanResult.journal.disk_used" class="residue-row">
+                <label class="residue-label">
+                  <input type="checkbox" :checked="isSelected('journal')" @change="toggleJournal" />
+                  journald 占用 <code>{{ scanResult.journal.disk_used }}</code>
+                  <span class="residue-desc">→ 压缩为</span>
+                  <input v-model.number="journalSize" type="number" min="1" max="10000" class="journal-size" />
+                  <span class="residue-desc">MB</span>
+                  <span class="badge badge-warning">低危</span>
+                </label>
+              </div>
 
-          <!-- Docker 残留 -->
-          <div v-if="dockerResidue.dangling || dockerResidue.stopped" class="residue-row">
-            <label class="residue-label">
-              <input type="checkbox" :checked="isSelected('prune')" @change="togglePrune" />
-              Docker 残留：dangling 镜像 {{ dockerResidue.dangling }} 个
-              <template v-if="dockerResidue.stopped"> / 停止容器 {{ dockerResidue.stopped }} 个</template>
-              <span class="residue-desc">→ docker-prune 整批回收</span>
-              <span class="badge badge-danger">高风险 · 强制人工审批</span>
-            </label>
-          </div>
-        </div>
-      </div>
-
-      <!-- ② 提交清理(向导) -->
-      <div class="wizard-submit">
-        <div v-if="selectedList.length" class="selected-panel">
-          <div class="selected-head">
-            <span class="selected-title">已选清理项（{{ selectedList.length }}）</span>
-          </div>
-          <div class="selected-list">
-            <div v-for="[key, sel] in selectedList" :key="key" class="selected-row">
-              <span class="selected-label" :title="sel.label">{{ sel.label }}</span>
-              <span class="badge" :class="sel.risk === 'high' ? 'badge-danger' : 'badge-warning'">
-                {{ sel.risk === 'high' ? '强制审批' : '按风险审批' }}
-              </span>
-              <button class="btn btn-secondary btn-sm" @click="removeSelected(key)">移除</button>
-            </div>
-          </div>
-        </div>
-
-        <div class="wizard-preview">
-          <span class="detail-label">策略预览（提交内容，只读）</span>
-          <pre class="detail-pre">{{ JSON.stringify(wizardStrategy, null, 2) }}</pre>
-        </div>
-
-        <div v-if="wizardError" class="error-tip">{{ wizardError }}</div>
-        <div class="form-actions">
-          <button class="btn btn-primary" :disabled="wizardRunning || !canSubmitWizard" @click="handleSubmitWizard">
-            {{ wizardRunning ? '提交中…' : '提交清理（按风险审批）' }}
-          </button>
-        </div>
-
-        <!-- 提交结果(结构化) -->
-        <div v-if="wizardResult" class="result-box">
-          <div class="result-head">
-            <span class="result-title">提交结果</span>
-            <button class="result-close" @click="wizardResult = null">×</button>
-          </div>
-          <div class="wizard-body">
-            <div class="submit-summary">
-              <span class="submit-stat">受理 {{ wizardSummary.accepted }} 项</span>
-              <span class="submit-stat">（挂审批单 {{ wizardSummary.pending }} / 自动执行 {{ wizardSummary.auto }}）</span>
-              <span v-if="wizardSummary.rejected" class="submit-stat danger">拒绝 {{ wizardSummary.rejected }} 项</span>
-            </div>
-            <div v-if="wizardResult.plan_id" class="residue-row">
-              批次号：<code>{{ wizardResult.plan_id }}</code>
-              <span class="residue-desc">挂单的项请到下方「审批队列」处理</span>
-            </div>
-            <div v-if="wizardRejectedItems.length" class="rejected-panel">
-              <div class="selected-title">被拒项及原因</div>
-              <div v-for="(it, i) in wizardRejectedItems" :key="i" class="rejected-row">
-                {{ it.reason }}
+              <!-- Docker 残留 -->
+              <div v-if="dockerResidue.dangling || dockerResidue.stopped" class="residue-row">
+                <label class="residue-label">
+                  <input type="checkbox" :checked="isSelected('prune')" @change="togglePrune" />
+                  Docker 残留：dangling 镜像 {{ dockerResidue.dangling }} 个
+                  <template v-if="dockerResidue.stopped"> / 停止容器 {{ dockerResidue.stopped }} 个</template>
+                  <span class="residue-desc">→ docker-prune 整批回收</span>
+                  <span class="badge badge-danger">高风险 · 强制人工审批</span>
+                </label>
               </div>
             </div>
           </div>
-        </div>
-      </div>
 
-      <!-- 快捷清理(原固定脚本) -->
-      <div v-if="showQuickCleanup" class="collapse-panel">
-        <div class="form-grid">
-          <div class="form-group">
-            <label class="form-label">清理类别</label>
-            <select v-model="cleanupForm.category" class="form-select">
-              <option v-for="c in CLEANUP_CATEGORIES" :key="c.value" :value="c.value">
-                {{ c.label }}
-              </option>
-            </select>
-          </div>
-        </div>
-        <p class="category-desc">{{ CLEANUP_CATEGORY_DESC[cleanupForm.category] || '' }}</p>
-        <div v-if="cleanupError" class="error-tip">{{ cleanupError }}</div>
-        <div class="form-actions">
-          <button class="btn btn-primary" :disabled="cleanupRunning" @click="handleCleanup">
-            {{ cleanupRunning ? '触发中…' : '▶ 触发整批清理（按风险审批）' }}
-          </button>
-        </div>
-        <div v-if="cleanupResult" class="result-box">
-          <div class="result-head">
-            <span class="result-title">快捷清理结果</span>
-            <button class="result-close" @click="cleanupResult = null">×</button>
-          </div>
-          <pre class="result-pre">{{ JSON.stringify(cleanupResult, null, 2) }}</pre>
-        </div>
-      </div>
+          <!-- ② 提交清理(向导) -->
+          <div class="wizard-submit">
+            <div v-if="selectedList.length" class="selected-panel">
+              <div class="selected-head">
+                <span class="selected-title">已选清理项（{{ selectedList.length }}）</span>
+              </div>
+              <div class="selected-list">
+                <div v-for="[key, sel] in selectedList" :key="key" class="selected-row">
+                  <span class="selected-label" :title="sel.label">{{ sel.label }}</span>
+                  <span class="badge" :class="sel.risk === 'high' ? 'badge-danger' : 'badge-warning'">
+                    {{ sel.risk === 'high' ? '强制审批' : '按风险审批' }}
+                  </span>
+                  <button class="btn btn-secondary btn-sm" @click="removeSelected(key)">移除</button>
+                </div>
+              </div>
+            </div>
 
-      <!-- 高级模式(手写 JSON) -->
-      <div v-if="showAdvanced" class="collapse-panel">
-        <div class="form-group">
-          <label class="form-label">AI 清理策略（JSON，每项映射到白名单模板）</label>
-          <textarea v-model="strategyJson" class="form-input" rows="5"
-            placeholder='{"mount": "/", "items": [{"type": "journal_vacuum", "size": "200"}]}'></textarea>
-        </div>
-        <div class="form-actions">
-          <button class="btn btn-outline" :disabled="scanRunning || !scanResult" @click="fillStrategyExample">
-            填充策略示例
-          </button>
-          <button class="btn btn-primary" :disabled="aiPlanRunning" @click="handleAiPlan">
-            {{ aiPlanRunning ? '提交中…' : '提交策略（按风险审批）' }}
-          </button>
-        </div>
-        <div v-if="aiPlanError" class="error-tip">{{ aiPlanError }}</div>
-        <div v-if="aiPlanResult" class="result-box">
-          <div class="result-head">
-            <span class="result-title">AI 策略结果</span>
-            <button class="result-close" @click="aiPlanResult = null">×</button>
+            <div class="wizard-preview">
+              <span class="detail-label">策略预览（提交内容，只读）</span>
+              <pre class="detail-pre">{{ JSON.stringify(wizardStrategy, null, 2) }}</pre>
+            </div>
+
+            <div v-if="wizardError" class="error-tip">{{ wizardError }}</div>
+            <div class="form-actions">
+              <button class="btn btn-primary" :disabled="wizardRunning || !canSubmitWizard" @click="handleSubmitWizard">
+                {{ wizardRunning ? '提交中…' : '提交清理（按风险审批）' }}
+              </button>
+            </div>
+
+            <!-- 提交结果(结构化) -->
+            <div v-if="wizardResult" class="result-box">
+              <div class="result-head">
+                <span class="result-title">提交结果</span>
+                <button class="result-close" @click="wizardResult = null">×</button>
+              </div>
+              <div class="wizard-body">
+                <div class="submit-summary">
+                  <span class="submit-stat">受理 {{ wizardSummary.accepted }} 项</span>
+                  <span class="submit-stat">（挂审批单 {{ wizardSummary.pending }} / 自动执行 {{ wizardSummary.auto }}）</span>
+                  <span v-if="wizardSummary.rejected" class="submit-stat danger">拒绝 {{ wizardSummary.rejected }} 项</span>
+                </div>
+                <div v-if="wizardResult.plan_id" class="residue-row">
+                  批次号：<code>{{ wizardResult.plan_id }}</code>
+                  <span class="residue-desc">挂单的项请到下方「审批队列」处理</span>
+                </div>
+                <div v-if="wizardRejectedItems.length" class="rejected-panel">
+                  <div class="selected-title">被拒项及原因</div>
+                  <div v-for="(it, i) in wizardRejectedItems" :key="i" class="rejected-row">
+                    {{ it.reason }}
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
-          <pre class="result-pre">{{ JSON.stringify(aiPlanResult, null, 2) }}</pre>
-        </div>
-      </div>
+
         </div>
       </div>
 
@@ -821,72 +769,66 @@ onMounted(loadAll)
       </div>
     </div>
 
-    <!-- 审批队列 -->
-    <div class="card">
-      <h3 class="card-title">审批队列</h3>
+    <!-- AI 审批 -->
+    <div id="approval-section" class="card">
+      <h3 class="card-title">AI 审批</h3>
       <div v-if="loading" class="state-tip">加载中…</div>
       <div v-else-if="errorMsg" class="state-tip error">{{ errorMsg }}</div>
-      <div v-else-if="!actions.length" class="state-tip">暂无自愈动作</div>
-      <div v-else class="table-wrap">
-        <table class="table">
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>服务器</th>
-              <th>场景</th>
-              <th>目标</th>
-              <th>风险</th>
-              <th>动作</th>
-              <th>状态</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="a in actions" :key="a.id">
-              <td>{{ a.id }}</td>
-              <td class="cell-name">{{ a.server_name || a.server_id || '-' }}</td>
-              <td>{{ sceneLabel(a.scene) }}</td>
-              <td class="col-target" :title="a.target">{{ truncate(a.target) }}</td>
-              <td>
+      <template v-else>
+        <div class="approval-block">
+          <div class="approval-head">
+            <span class="approval-title">待我审批（{{ pendingActions.length }}）</span>
+          </div>
+          <div v-if="actionError" class="error-tip">{{ actionError }}</div>
+          <div v-if="!pendingActions.length" class="scene-hint">全部已处理 ✓</div>
+          <div v-else class="approval-list">
+            <div v-for="a in pendingActions" :key="a.id" class="approval-row">
+              <div class="approval-info">
                 <span class="badge" :class="severityBadge(a.severity)">{{ severityLabel(a.severity) }}</span>
-              </td>
-              <td>
-                <code class="cmd-text" :title="a.rendered_command">{{ a.rendered_command || '-' }}</code>
-              </td>
-              <td>
-                <span class="badge" :class="statusBadge(a.status)">{{ statusLabel(a.status) }}</span>
-              </td>
-              <td>
-                <div class="action-btns">
-                  <button
-                    class="btn btn-secondary btn-sm"
-                    :disabled="approvingId !== null"
-                    @click="openDetail(a)"
-                  >
-                    详情
-                  </button>
-                  <template v-if="a.status === 'pending'">
-                    <button
-                      class="btn btn-primary btn-sm"
-                      :disabled="approvingId !== null"
-                      @click="askApprove(a)"
-                    >
-                      {{ approvingId === a.id ? '处理中…' : '批准' }}
-                    </button>
-                    <button
-                      class="btn btn-danger btn-sm"
-                      :disabled="approvingId !== null"
-                      @click="askReject(a)"
-                    >
-                      拒绝
-                    </button>
-                  </template>
-                </div>
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+                <span class="approval-scene">{{ sceneLabel(a.scene) }}</span>
+                <code class="cmd-text" :title="a.rendered_command || a.target">{{ a.rendered_command || JSON.stringify(a.target) }}</code>
+              </div>
+              <div v-if="approvalReasons(a)" class="approval-reason">原因：{{ approvalReasons(a) }}</div>
+              <div class="action-btns">
+                <button class="btn btn-outline btn-sm" :disabled="approvingId !== null" @click="openDetail(a)">详情</button>
+                <button class="btn btn-primary btn-sm" :disabled="approvingId !== null" @click="askApprove(a)">批准</button>
+                <button class="btn btn-danger btn-sm" :disabled="approvingId !== null" @click="askReject(a)">拒绝</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <details class="history-block">
+          <summary>历史记录（{{ historyActions.length }}）</summary>
+          <div class="table-wrap">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>ID</th><th>服务器</th><th>场景</th><th>目标</th><th>风险</th><th>动作</th><th>状态</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="a in historyActions" :key="a.id">
+                  <td>{{ a.id }}</td>
+                  <td class="cell-name">{{ a.server_name || a.server_id || '-' }}</td>
+                  <td>{{ sceneLabel(a.scene) }}</td>
+                  <td class="col-target" :title="a.target">{{ truncate(JSON.stringify(a.target)) }}</td>
+                  <td>
+                    <span class="badge" :class="severityBadge(a.severity)">{{ severityLabel(a.severity) }}</span>
+                  </td>
+                  <td><code class="cmd-text" :title="a.rendered_command">{{ a.rendered_command || '-' }}</code></td>
+                  <td>
+                    <span class="badge" :class="statusBadge(a.status)">{{ statusLabel(a.status) }}</span>
+                  </td>
+                </tr>
+                <tr v-if="!historyActions.length">
+                  <td colspan="7" class="state-tip">暂无记录</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </details>
+      </template>
     </div>
 
     <!-- 审批详情弹窗 -->
@@ -1315,7 +1257,40 @@ textarea.form-input {
 .rejected-panel { border: 1px solid rgba(239, 68, 68, 0.35); border-radius: var(--radius-sm); padding: 10px; display: flex; flex-direction: column; gap: 6px; }
 .rejected-row { font-size: 12px; word-break: break-all; }
 /* 快捷清理 / 高级模式 折叠面板 */
-.collapse-row { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
 .collapse-panel { border: 1px dashed var(--color-border-light); border-radius: var(--radius-sm); padding: 12px; margin-bottom: 12px; }
 .category-desc { margin: 8px 0 0; font-size: 12px; color: var(--color-text-secondary); }
+
+/* 自愈场景卡片 */
+.global-server { margin-bottom: 16px; display: flex; align-items: center; gap: 10px; }
+.global-server .form-select { max-width: 360px; }
+.scene-grid { display: flex; flex-direction: column; gap: 16px; margin-bottom: 24px; }
+.scene-card { border: 1px solid var(--color-border-light); border-radius: var(--radius-md, 10px); overflow: hidden; }
+.scene-head { display: flex; align-items: center; gap: 12px; padding: 14px 16px; background: var(--color-border-light); }
+.scene-icon { font-size: 20px; }
+.scene-title-block { flex: 1; }
+.scene-title { font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.scene-desc { font-size: 12px; color: var(--color-text-secondary); margin-top: 2px; }
+.scene-badge { background: var(--color-danger); color: #fff; border-radius: 10px; padding: 1px 8px; font-size: 12px; }
+.scene-body { padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; }
+.scene-hint { font-size: 13px; color: var(--color-text-secondary); padding: 10px 12px; border: 1px dashed var(--color-border-light); border-radius: var(--radius-sm); }
+.scene-result { display: flex; flex-direction: column; gap: 8px; }
+.scene-summary { font-size: 13px; font-weight: 600; padding: 8px 12px; border-radius: var(--radius-sm); }
+.scene-summary.tone-success { background: rgba(16,185,129,0.12); color: var(--color-success); }
+.scene-summary.tone-warning { background: rgba(245,158,11,0.12); color: var(--color-warning); }
+.scene-summary.tone-danger { background: rgba(239,68,68,0.12); color: var(--color-danger); }
+.scene-summary.tone-info { background: rgba(59,130,246,0.12); color: var(--color-info); }
+.scene-json summary { font-size: 12px; color: var(--color-text-secondary); cursor: pointer; }
+.stat-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--color-danger); margin-left: 6px; vertical-align: middle; }
+.stat-link { cursor: pointer; }
+/* AI 审批 */
+.approval-block { margin-bottom: 14px; }
+.approval-head { padding: 8px 0; }
+.approval-title { font-size: 13px; font-weight: 600; }
+.approval-list { display: flex; flex-direction: column; gap: 8px; }
+.approval-row { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--color-border-light); border-radius: var(--radius-sm); }
+.approval-info { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.approval-scene { font-size: 13px; font-weight: 500; }
+.approval-reason { font-size: 12px; color: var(--color-text-secondary); word-break: break-all; }
+.history-block { border-top: 1px solid var(--color-border-light); padding-top: 10px; }
+.history-block summary { cursor: pointer; font-size: 13px; color: var(--color-text-secondary); }
 </style>
