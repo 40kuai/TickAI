@@ -216,7 +216,9 @@ class SkillVersion(Base):
     content: Mapped[str] = mapped_column(Text)
     diff: Mapped[str] = mapped_column(Text, default="")
     reason: Mapped[str] = mapped_column(String(64), default="manual")
-    # initial | manual | auto_evolve
+    # initial | manual | auto_evolve | rollback
+    status: Mapped[str] = mapped_column(String(16), default="active")
+    # active | pending | rolled_back  (P2 进化门禁: 候选待审批/已生效/已处置)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 

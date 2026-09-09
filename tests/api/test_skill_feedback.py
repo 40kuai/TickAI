@@ -33,10 +33,13 @@ app.include_router(skill_router)
 
 class SkillFeedbackApiTests(unittest.TestCase):
     def setUp(self):
+        # skill_versions 表结构随 P2 加了 status 列, 重建测试表保证最新 schema
+        from sqlalchemy import text
+        with db.engine.begin() as conn:
+            conn.execute(text("DROP TABLE IF EXISTS skill_versions"))
         db.init_db()
         with db.session_scope() as s:
             s.query(models.SkillOutcome).delete()
-            s.query(models.SkillVersion).delete()
         # 造数据: 2 条反馈 + 2 个版本
         with db.session_scope() as s:
             s.add(models.SkillOutcome(

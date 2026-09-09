@@ -20,6 +20,11 @@ const feedbackNotes = ref({})
 const feedbackBusy = ref({})
 const feedbackMsg = ref('')
 
+// P2: 技能进化门禁
+const evolveBusy = ref(false)
+const evolveMsg = ref('')
+const versionBusy = ref({})
+
 // 决策状态映射
 const DECISION_LABELS = {
   pending: '待标注',
@@ -30,6 +35,12 @@ const REASON_LABELS = {
   initial: '初始版本',
   manual: '手动修改',
   auto_evolve: '自动进化',
+  rollback: '回滚',
+}
+const STATUS_LABELS = {
+  active: '线上',
+  pending: '待审批',
+  rolled_back: '已处置',
 }
 
 // 触发器标签映射
@@ -136,6 +147,45 @@ async function markFeedback(outcome, decision) {
   }
 }
 
+// P2: 提议进化（生成候选待审，不写盘）
+async function proposeEvolve() {
+  if (evolveBusy.value) return
+  evolveBusy.value = true
+  evolveMsg.value = ''
+  try {
+    const res = await api.post(`/skills/${encodeURIComponent(detail.value.name)}/evolve`)
+    evolveMsg.value = `候选版本 v${res.data.version} 已生成，待审批（${(res.data.diff || '').split('\n').length} 行差异）`
+    await reloadVersions()
+  } catch (err) {
+    evolveMsg.value = err.response?.data?.detail || '进化生成失败'
+  } finally {
+    evolveBusy.value = false
+  }
+}
+
+// P2: 批准/拒绝/回滚版本
+async function versionAction(v, action) {
+  if (versionBusy.value[v.id]) return
+  versionBusy.value[v.id] = true
+  evolveMsg.value = ''
+  try {
+    await api.post(`/skills/${encodeURIComponent(detail.value.name)}/versions/${v.id}/${action}`)
+    evolveMsg.value = action === 'approve' ? `v${v.version} 已批准并生效`
+      : action === 'reject' ? `v${v.version} 已拒绝`
+      : `已回滚到 v${v.version}`
+    await reloadVersions()
+  } catch (err) {
+    evolveMsg.value = err.response?.data?.detail || '操作失败'
+  } finally {
+    versionBusy.value[v.id] = false
+  }
+}
+
+async function reloadVersions() {
+  const vs = await api.get(`/skills/${encodeURIComponent(detail.value.name)}/versions`)
+  versionsList.value = vs.data?.versions || []
+}
+
 function closeDetail() {
   detailVisible.value = false
   detail.value = null
@@ -230,18 +280,49 @@ onMounted(loadSkills)
               </div>
             </div>
 
-            <!-- P1: 进化历史 -->
+            <!-- P2: 技能进化门禁（提议进化 → 候选待审 → 批准生效/拒绝/回滚） -->
             <div class="detail-section">
-              <div class="section-title">进化历史 <span class="section-count">({{ versionsList.length }})</span></div>
+              <div class="section-title">
+                技能进化
+                <button
+                  class="btn btn-sm btn-primary evolve-btn"
+                  :disabled="evolveBusy"
+                  @click="proposeEvolve"
+                >{{ evolveBusy ? '生成中…' : '提议进化' }}</button>
+              </div>
+              <p class="evolution-hint">基于执行反馈生成候选版本，<b>不直接生效</b>，审批通过后才写入线上。</p>
+              <div v-if="evolveMsg" class="feedback-msg">{{ evolveMsg }}</div>
               <div v-if="!versionsList.length" class="empty-line">暂无版本记录</div>
               <div v-else class="version-list">
-                <div v-for="v in versionsList" :key="v.version" class="version-item">
+                <div v-for="v in versionsList" :key="v.id" class="version-item">
                   <div class="version-head">
                     <span class="version-no">v{{ v.version }}</span>
                     <span class="badge badge-gray">{{ REASON_LABELS[v.reason] || v.reason }}</span>
+                    <span class="badge" :class="v.status === 'pending' ? 'badge-warning' : (v.status === 'active' ? 'badge-info' : 'badge-gray')">
+                      {{ STATUS_LABELS[v.status] || v.status }}
+                    </span>
                     <span class="version-time">{{ v.created_at?.slice(0, 16).replace('T', ' ') || '-' }}</span>
                   </div>
                   <pre v-if="v.diff" class="version-diff">{{ v.diff }}</pre>
+                  <div v-if="v.status === 'pending'" class="version-actions">
+                    <button
+                      class="btn btn-sm btn-primary"
+                      :disabled="versionBusy[v.id]"
+                      @click="versionAction(v, 'approve')"
+                    >批准生效</button>
+                    <button
+                      class="btn btn-sm btn-outline"
+                      :disabled="versionBusy[v.id]"
+                      @click="versionAction(v, 'reject')"
+                    >拒绝</button>
+                  </div>
+                  <div v-else-if="v.status === 'active' && v.version !== 1" class="version-actions">
+                    <button
+                      class="btn btn-sm btn-outline"
+                      :disabled="versionBusy[v.id]"
+                      @click="versionAction(v, 'rollback')"
+                    >回滚到此版本</button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -504,6 +585,20 @@ onMounted(loadSkills)
   word-break: break-all;
   max-height: 120px;
   overflow-y: auto;
+}
+.evolve-btn {
+  margin-left: 8px;
+  vertical-align: middle;
+}
+.evolution-hint {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.version-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
 }
 .markdown-body :deep(h1),
 .markdown-body :deep(h2),

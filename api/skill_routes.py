@@ -120,6 +120,7 @@ def get_skill_versions(name: str, user=Depends(get_current_user)):
     """List evolution history (SkillVersion), newest first.
 
     diff 截断返回(保持 payload 小); 完整内容走 get_skill_detail。
+    P2 门禁: 每条带 status(active/pending/rolled_back), pending=候选待审批。
     """
     with db.session_scope() as s:
         rows = (
@@ -134,6 +135,7 @@ def get_skill_versions(name: str, user=Depends(get_current_user)):
                 {
                     "version": r.version,
                     "reason": r.reason,
+                    "status": r.status,
                     "created_at": r.created_at.isoformat() if r.created_at else None,
                     "diff": (r.diff or "")[:500],
                 }
@@ -141,3 +143,134 @@ def get_skill_versions(name: str, user=Depends(get_current_user)):
             ],
             "count": len(rows),
         }
+
+
+# ============================================================
+# P2 技能进化门禁: 提议进化(生成候选待审) → 批准生效/拒绝/回滚
+# ============================================================
+
+
+@router.post("/{name}/evolve")
+def evolve_skill(name: str, user=Depends(get_current_user)):
+    """生成进化候选版本(pending), 不写盘; 人工审批后才生效(fail-closed 门禁)."""
+    import difflib
+    from pathlib import Path
+
+    from hermes.agents.skill_evolver import EvolutionError, evolve_skill as _evolve
+
+    try:
+        new_content = _evolve(name, save=False)
+    except EvolutionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"进化生成失败: {exc}",
+        ) from exc
+
+    # diff vs 当前线上 .md 全文
+    diff = ""
+    try:
+        cur = load_skill(name)
+        old_text = Path(cur["path"]).read_text(encoding="utf-8")
+        diff = "".join(difflib.unified_diff(
+            old_text.splitlines(keepends=True),
+            new_content.splitlines(keepends=True),
+            fromfile="before", tofile="after", n=2,
+        ))[:2000]
+    except Exception:
+        diff = "[diff unavailable]"
+
+    with db.session_scope() as s:
+        from sqlalchemy import func, select
+        max_v = s.execute(
+            select(func.max(models.SkillVersion.version))
+            .where(models.SkillVersion.skill_name == name)
+        ).scalar() or 0
+        rec = models.SkillVersion(
+            skill_name=name,
+            version=int(max_v) + 1,
+            content=new_content,
+            diff=diff,
+            reason="auto_evolve",
+            status="pending",
+        )
+        s.add(rec)
+        s.flush()
+        vid = rec.id
+        ver = rec.version
+    return {"version_id": vid, "version": ver, "status": "pending", "diff": diff}
+
+
+@router.post("/{name}/versions/{vid}/approve")
+def approve_skill_version(name: str, vid: int, user=Depends(get_current_user)):
+    """批准候选版本: 写入线上 .md 生效, 候选标记已处置. 仅 pending 可批准."""
+    from hermes.skills.loader import save_skill
+
+    with db.session_scope() as s:
+        row = (
+            s.query(models.SkillVersion)
+            .filter_by(id=vid, skill_name=name)
+            .first()
+        )
+        if row is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"版本 {vid} 不存在或不属于技能 '{name}'",
+            )
+        if row.status != "pending":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"版本 {vid} 状态为 {row.status}, 仅 pending 候选可批准",
+            )
+        content = row.content
+    # 写盘生效: 独立事务, 避免嵌套 session(SQLite 单连接锁)
+    save_skill(name, content, reason="auto_evolve")
+    with db.session_scope() as s:
+        row = s.query(models.SkillVersion).filter_by(id=vid, skill_name=name).first()
+        row.status = "rolled_back"  # 原候选标记已处置
+    return {"status": "approved", "version_id": vid}
+
+
+@router.post("/{name}/versions/{vid}/reject")
+def reject_skill_version(name: str, vid: int, user=Depends(get_current_user)):
+    """拒绝候选版本: 不写盘, 标记 rolled_back. 仅 pending 可拒绝."""
+    with db.session_scope() as s:
+        row = (
+            s.query(models.SkillVersion)
+            .filter_by(id=vid, skill_name=name)
+            .first()
+        )
+        if row is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"版本 {vid} 不存在或不属于技能 '{name}'",
+            )
+        if row.status != "pending":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"版本 {vid} 状态为 {row.status}, 仅 pending 候选可拒绝",
+            )
+        row.status = "rolled_back"
+    return {"status": "rejected", "version_id": vid}
+
+
+@router.post("/{name}/versions/{vid}/rollback")
+def rollback_skill_version(name: str, vid: int, user=Depends(get_current_user)):
+    """回滚到历史版本: 以该版本内容生成新的 active 版本(不破坏既有历史)."""
+    from hermes.skills.loader import save_skill
+
+    with db.session_scope() as s:
+        row = (
+            s.query(models.SkillVersion)
+            .filter_by(id=vid, skill_name=name)
+            .first()
+        )
+        if row is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"版本 {vid} 不存在或不属于技能 '{name}'",
+            )
+        content = row.content
+        target = row.version
+    # 独立事务写盘, 避免嵌套 session
+    save_skill(name, content, reason="rollback")
+    return {"status": "rolled_back", "version_id": vid, "target_version": target}

@@ -1,0 +1,158 @@
+"""API 层技能进化门禁测试 (P2 能力治理).
+
+覆盖 /api/skills 新增端点:
+- POST /{name}/evolve                     生成候选(pending), 不写盘
+- POST /{name}/versions/{vid}/approve     批准生效(写盘+状态流转)
+- POST /{name}/versions/{vid}/reject      拒绝(不写盘)
+- POST /{name}/versions/{vid}/rollback    回滚(生成新 active 版本)
+- 非 pending approve/reject → 409; LLM 失败 → 502
+
+关键安全约束: 测试绝不写真实技能库 —— mock save_skill 拦截写盘,
+仅断言调用与 DB 状态流转。
+"""
+import os
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+os.environ.setdefault("OPS_DB_PATH", "/tmp/opsticket_test/api_skill_evolution.db")
+os.environ.setdefault("COOKIE_SECURE", "false")
+os.environ["ADMIN_INITIAL_PASSWORD"] = "admin-test-pw"
+Path("/tmp/opsticket_test").mkdir(parents=True, exist_ok=True)
+
+from fastapi import FastAPI  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
+
+from hermes.agents.skill_evolver import EvolutionError  # noqa: E402
+from hermes.auth import create_session, get_user, init_default_user  # noqa: E402
+from hermes.data import db, models  # noqa: E402
+
+from api.deps import create_access_token  # noqa: E402
+from api.skill_routes import router as skill_router  # noqa: E402
+
+app = FastAPI()
+app.include_router(skill_router)
+
+NEW_CONTENT = (
+    "---\n"
+    "name: detect_oom_killed\n"
+    "description: improved version\n"
+    "trigger: scheduled_daily\n"
+    "severity: critical\n"
+    "---\n\n"
+    "# improved instructions\n"
+)
+
+
+class SkillEvolutionApiTests(unittest.TestCase):
+    def setUp(self):
+        # skill_versions 表结构随 P2 加了 status 列, 重建测试表保证最新 schema
+        from sqlalchemy import text
+        with db.engine.begin() as conn:
+            conn.execute(text("DROP TABLE IF EXISTS skill_versions"))
+        db.init_db()
+        with db.session_scope() as s:
+            # 初始 active v1
+            s.add(models.SkillVersion(
+                skill_name="detect_oom_killed", version=1,
+                content="# v1", diff="", reason="initial", status="active"))
+        init_default_user()
+        admin = get_user("admin")
+        sid = create_session(admin)
+        token = create_access_token({"session_id": sid})
+        self.client = TestClient(app, base_url="https://testserver")
+        self.client.cookies.set("access_token", token)
+
+    def _pending_id(self):
+        with db.session_scope() as s:
+            row = (s.query(models.SkillVersion)
+                   .filter_by(status="pending").first())
+            return row.id if row else None
+
+    @patch("hermes.agents.skill_evolver.evolve_skill", return_value=NEW_CONTENT)
+    def test_evolve_creates_pending_without_writing(self, _mock_evolve):
+        res = self.client.post("/api/skills/detect_oom_killed/evolve")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["status"], "pending")
+        with db.session_scope() as s:
+            row = s.query(models.SkillVersion).get(data["version_id"])
+            self.assertEqual(row.status, "pending")
+            self.assertEqual(row.reason, "auto_evolve")
+            self.assertEqual(row.version, 2)
+            self.assertIn("improved", row.content)
+
+    @patch("hermes.agents.skill_evolver.evolve_skill",
+           side_effect=EvolutionError("LLM down"))
+    def test_evolve_llm_failure_returns_502(self, _mock_evolve):
+        res = self.client.post("/api/skills/detect_oom_killed/evolve")
+        self.assertEqual(res.status_code, 502)
+        self.assertIn("进化生成失败", res.json()["detail"])
+
+    @patch("hermes.agents.skill_evolver.evolve_skill", return_value=NEW_CONTENT)
+    @patch("hermes.skills.loader.save_skill")
+    def test_approve_applies_and_marks_candidate_disposed(self, mock_save, _mock_evolve):
+        self.client.post("/api/skills/detect_oom_killed/evolve")
+        vid = self._pending_id()
+        self.assertIsNotNone(vid)
+        res = self.client.post(f"/api/skills/detect_oom_killed/versions/{vid}/approve")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["status"], "approved")
+        # 写盘被调用, 且内容为候选版本
+        self.assertEqual(mock_save.call_count, 1)
+        saved_content = mock_save.call_args[0][1]
+        self.assertIn("improved", saved_content)
+        # 原候选标记已处置
+        with db.session_scope() as s:
+            self.assertEqual(s.query(models.SkillVersion).get(vid).status, "rolled_back")
+
+    @patch("hermes.agents.skill_evolver.evolve_skill", return_value=NEW_CONTENT)
+    @patch("hermes.skills.loader.save_skill")
+    def test_reject_does_not_apply(self, mock_save, _mock_evolve):
+        self.client.post("/api/skills/detect_oom_killed/evolve")
+        vid = self._pending_id()
+        res = self.client.post(f"/api/skills/detect_oom_killed/versions/{vid}/reject")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["status"], "rejected")
+        mock_save.assert_not_called()
+        with db.session_scope() as s:
+            self.assertEqual(s.query(models.SkillVersion).get(vid).status, "rolled_back")
+
+    @patch("hermes.agents.skill_evolver.evolve_skill", return_value=NEW_CONTENT)
+    @patch("hermes.skills.loader.save_skill")
+    def test_rollback_creates_new_active_version(self, mock_save, _mock_evolve):
+        # 造一条历史 active v1(已有), 回滚到它
+        with db.session_scope() as s:
+            v1 = s.query(models.SkillVersion).filter_by(version=1).first()
+            v1_id = v1.id
+        res = self.client.post(f"/api/skills/detect_oom_killed/versions/{v1_id}/rollback")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["target_version"], 1)
+        mock_save.assert_called_once()
+        args = mock_save.call_args
+        self.assertEqual(args[1]["reason"], "rollback")
+
+    @patch("hermes.agents.skill_evolver.evolve_skill", return_value=NEW_CONTENT)
+    def test_approve_non_pending_returns_409(self, _mock_evolve):
+        with db.session_scope() as s:
+            v1 = s.query(models.SkillVersion).filter_by(version=1).first()
+            v1_id = v1.id
+        res = self.client.post(f"/api/skills/detect_oom_killed/versions/{v1_id}/approve")
+        self.assertEqual(res.status_code, 409)
+        self.assertIn("仅 pending", res.json()["detail"])
+
+    def test_versions_include_status(self):
+        res = self.client.get("/api/skills/detect_oom_killed/versions")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["count"], 1)
+        self.assertEqual(data["versions"][0]["status"], "active")
+
+    @patch("hermes.agents.skill_evolver.evolve_skill", return_value=NEW_CONTENT)
+    def test_approve_missing_version_404(self, _mock_evolve):
+        res = self.client.post("/api/skills/detect_oom_killed/versions/99999/approve")
+        self.assertEqual(res.status_code, 404)
+
+
+if __name__ == "__main__":
+    unittest.main()
