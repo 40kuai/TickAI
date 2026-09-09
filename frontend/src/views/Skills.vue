@@ -13,6 +13,25 @@ const detailLoading = ref(false)
 const detail = ref(null)
 const detailError = ref('')
 
+// P1: 执行反馈 + 进化历史
+const feedbackList = ref([])
+const versionsList = ref([])
+const feedbackNotes = ref({})
+const feedbackBusy = ref({})
+const feedbackMsg = ref('')
+
+// 决策状态映射
+const DECISION_LABELS = {
+  pending: '待标注',
+  accepted: '已接受',
+  rejected: '已拒绝',
+}
+const REASON_LABELS = {
+  initial: '初始版本',
+  manual: '手动修改',
+  auto_evolve: '自动进化',
+}
+
 // 触发器标签映射
 const TRIGGER_LABELS = {
   scheduled_daily: '定时巡检',
@@ -72,15 +91,48 @@ function renderMarkdown(content) {
 async function openDetail(skill) {
   detail.value = null
   detailError.value = ''
+  feedbackList.value = []
+  versionsList.value = []
+  feedbackNotes.value = {}
+  feedbackMsg.value = ''
   detailVisible.value = true
   detailLoading.value = true
   try {
-    const res = await api.get(`/skills/${encodeURIComponent(skill.name)}`)
-    detail.value = res.data
+    const name = encodeURIComponent(skill.name)
+    const [d, fb, vs] = await Promise.all([
+      api.get(`/skills/${name}`),
+      api.get(`/skills/${name}/feedback`),
+      api.get(`/skills/${name}/versions`),
+    ])
+    detail.value = d.data
+    feedbackList.value = fb.data?.feedback || []
+    versionsList.value = vs.data?.versions || []
   } catch (err) {
     detailError.value = err.response?.data?.detail || '加载技能详情失败'
   } finally {
     detailLoading.value = false
+  }
+}
+
+// 标注反馈（接受/拒绝）
+async function markFeedback(outcome, decision) {
+  const id = outcome.id
+  if (feedbackBusy.value[id]) return
+  feedbackBusy.value[id] = true
+  feedbackMsg.value = ''
+  try {
+    await api.post(`/skills/${encodeURIComponent(detail.value.name)}/feedback/${id}`, {
+      decision,
+      notes: feedbackNotes.value[id] || '',
+    })
+    // 刷新反馈列表
+    const fb = await api.get(`/skills/${encodeURIComponent(detail.value.name)}/feedback`)
+    feedbackList.value = fb.data?.feedback || []
+    feedbackMsg.value = `已标注为「${DECISION_LABELS[decision]}」`
+  } catch (err) {
+    feedbackMsg.value = err.response?.data?.detail || '标注失败'
+  } finally {
+    feedbackBusy.value[id] = false
   }
 }
 
@@ -141,6 +193,58 @@ onMounted(loadSkills)
             </div>
             <p class="detail-desc">{{ detail.description || '暂无描述' }}</p>
             <div class="detail-body markdown-body" v-html="renderMarkdown(detail.body)"></div>
+
+            <!-- P1: 执行反馈标注（进化学习信号） -->
+            <div class="detail-section">
+              <div class="section-title">执行反馈 <span class="section-count">({{ feedbackList.length }})</span></div>
+              <div v-if="feedbackMsg" class="feedback-msg">{{ feedbackMsg }}</div>
+              <div v-if="!feedbackList.length" class="empty-line">暂无执行记录，技能运行后将在此标注反馈</div>
+              <div v-else class="feedback-list">
+                <div v-for="fb in feedbackList" :key="fb.id" class="feedback-item">
+                  <div class="feedback-head">
+                    <span class="feedback-time">{{ fb.run_at?.slice(0, 16).replace('T', ' ') || '-' }}</span>
+                    <span class="badge badge-gray">v{{ fb.skill_version }}</span>
+                    <span class="badge" :class="fb.user_decision === 'accepted' ? 'badge-info' : (fb.user_decision === 'rejected' ? 'badge-critical' : 'badge-gray')">
+                      {{ DECISION_LABELS[fb.user_decision] || fb.user_decision }}
+                    </span>
+                  </div>
+                  <p class="feedback-summary">{{ fb.findings_summary || '（无摘要）' }}</p>
+                  <div class="feedback-actions">
+                    <input
+                      v-model="feedbackNotes[fb.id]"
+                      class="form-input feedback-note"
+                      placeholder="备注（可选）"
+                    />
+                    <button
+                      class="btn btn-sm btn-primary"
+                      :disabled="feedbackBusy[fb.id]"
+                      @click="markFeedback(fb, 'accepted')"
+                    >接受</button>
+                    <button
+                      class="btn btn-sm btn-outline"
+                      :disabled="feedbackBusy[fb.id]"
+                      @click="markFeedback(fb, 'rejected')"
+                    >拒绝</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- P1: 进化历史 -->
+            <div class="detail-section">
+              <div class="section-title">进化历史 <span class="section-count">({{ versionsList.length }})</span></div>
+              <div v-if="!versionsList.length" class="empty-line">暂无版本记录</div>
+              <div v-else class="version-list">
+                <div v-for="v in versionsList" :key="v.version" class="version-item">
+                  <div class="version-head">
+                    <span class="version-no">v{{ v.version }}</span>
+                    <span class="badge badge-gray">{{ REASON_LABELS[v.reason] || v.reason }}</span>
+                    <span class="version-time">{{ v.created_at?.slice(0, 16).replace('T', ' ') || '-' }}</span>
+                  </div>
+                  <pre v-if="v.diff" class="version-diff">{{ v.diff }}</pre>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -315,6 +419,91 @@ onMounted(loadSkills)
 .detail-body {
   border-top: 1px solid var(--color-border, #eee);
   padding-top: 14px;
+}
+.detail-section {
+  border-top: 1px solid var(--color-border, #eee);
+  padding-top: 14px;
+}
+.section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  margin-bottom: 8px;
+}
+.section-count {
+  font-weight: 400;
+}
+.empty-line {
+  font-size: 12px;
+  color: var(--color-text-light);
+  padding: 6px 0;
+}
+.feedback-msg {
+  font-size: 12px;
+  color: var(--color-primary);
+  margin-bottom: 6px;
+}
+.feedback-list,
+.version-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.feedback-item,
+.version-item {
+  border: 1px solid var(--color-border-light, #e5e7eb);
+  border-radius: var(--radius-sm, 6px);
+  padding: 10px 12px;
+}
+.feedback-head,
+.version-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.feedback-time,
+.version-time {
+  font-size: 11px;
+  color: var(--color-text-light);
+}
+.feedback-summary {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--color-text);
+  line-height: 1.5;
+}
+.feedback-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+  align-items: center;
+}
+.feedback-note {
+  flex: 1;
+  min-width: 120px;
+  padding: 5px 8px;
+  font-size: 12px;
+}
+.version-no {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--color-primary);
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+}
+.version-diff {
+  margin-top: 6px;
+  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  background: var(--color-bg-code, #f8fafc);
+  border-radius: 4px;
+  padding: 8px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 120px;
+  overflow-y: auto;
 }
 .markdown-body :deep(h1),
 .markdown-body :deep(h2),
