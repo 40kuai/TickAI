@@ -325,6 +325,12 @@ def rollback_skill_version(name: str, vid: int, user=Depends(get_current_user)):
             )
         content = row.content
         target = row.version
+        # 门禁完整性: pending 候选应走批准/拒绝, 不允许回滚(否则可绕过审批直接生效)
+        if row.status == "pending":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"版本 {vid} 为待审批候选, 请先批准或拒绝, 不支持回滚",
+            )
         # 防无效回滚: 目标内容与当前线上(active 版本)一致时拒绝, 避免冗余
         cur = (
             s.query(models.SkillVersion)

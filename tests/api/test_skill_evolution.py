@@ -171,6 +171,20 @@ class SkillEvolutionApiTests(unittest.TestCase):
         mock_save.assert_not_called()
 
     @patch("hermes.skills.loader.save_skill")
+    def test_rollback_pending_candidate_409(self, mock_save):
+        """pending 待审候选应走批准/拒绝, 不允许回滚(防绕过审批门禁)."""
+        with db.session_scope() as s:
+            s.add(models.SkillVersion(
+                skill_name="detect_oom_killed", version=50,
+                content=NEW_CONTENT, diff="", reason="auto_evolve", status="pending"))
+            s.flush()
+            pid = s.query(models.SkillVersion).filter_by(version=50).first().id
+        res = self.client.post(f"/api/skills/detect_oom_killed/versions/{pid}/rollback")
+        self.assertEqual(res.status_code, 409)
+        self.assertIn("批准", res.json()["detail"])
+        mock_save.assert_not_called()
+
+    @patch("hermes.skills.loader.save_skill")
     def test_rollback_invalid_candidate_409(self, mock_save):
         """回滚到内容无效的历史版本(无 frontmatter) → 409, 不写盘(fail-closed)."""
         with db.session_scope() as s:
