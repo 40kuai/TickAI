@@ -153,17 +153,24 @@ class RunLowRiskDiskTests(_SelfHealTestCase):
         self.assertEqual(result["status"], "pending")
         self.assertIn("需人工审批", result["message"])
 
-    def test_probe_unknown_unit_returns_clear_failure(self):
-        # systemctl is-active 输出 unknown(单元不存在) → failed 且 reason 语义化提示
+    def test_probe_unknown_state_continues_selfheal(self):
+        # CentOS7(systemd 219): systemctl is-active 对停止(非 active)服务返回 "unknown"+exit≠0,
+        # 这是"服务异常"信号而非单元不存在 → 应继续自愈(审批/执行), 而不是落 failed
         os.environ["SELFHEAL_SERVICE_WHITELIST"] = "nginx"
         config.reload_config()
-        with _mock_exec([{"success": False, "exit_code": 3,
-                          "stdout": "unknown", "stderr": ""}]):
-            result = orchestrator.run_selfheal(
-                1, "process_restart", {"service": "nginx"}, "user")
-        self.assertEqual(result["status"], "failed")
-        self.assertIn("未找到", result["reason"])
-        self.assertIn("unknown", result["reason"])
+        import hermes.selfheal.approval as approval_mod
+
+        def _fake_judge(payload):
+            return {"risk_score": 5, "recommendation": "approval", "reasons": ["服务未运行, 需确认重启"]}
+
+        with patch.object(approval_mod, "_default_judge", side_effect=_fake_judge):
+            with _mock_exec([{"success": False, "exit_code": 3,
+                              "stdout": "unknown", "stderr": ""}]):
+                result = orchestrator.run_selfheal(
+                    1, "process_restart", {"service": "nginx"}, "user")
+        self.assertNotEqual(result["status"], "failed")
+        self.assertEqual(result["status"], "pending")
+        self.assertIn("需人工审批", result["message"])
 
     def test_exec_failure_returns_failed_and_persists(self):
         # 探测 85% + AI 判定 auto → 执行失败(exec_ssh success=False) → status=failed 且落库失败记录
