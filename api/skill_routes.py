@@ -175,6 +175,15 @@ def evolve_skill(
             detail=f"进化生成失败: {exc}",
         ) from exc
 
+    # fail-closed: LLM 输出必须为完整技能(有效 frontmatter + 正文), 残片直接拒绝落候选
+    from hermes.skills.loader import validate_skill_content
+    invalid = validate_skill_content(new_content, name)
+    if invalid:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"进化生成失败: 生成内容校验未通过 - {invalid}",
+        )
+
     # diff vs 当前线上 .md 全文
     diff = ""
     try:
@@ -231,6 +240,14 @@ def approve_skill_version(name: str, vid: int, user=Depends(get_current_user)):
                 detail=f"版本 {vid} 状态为 {row.status}, 仅 pending 候选可批准",
             )
         content = row.content
+    # fail-closed: 候选内容必须为完整技能(有效 frontmatter + 正文), 坏候选拒绝写盘
+    from hermes.skills.loader import validate_skill_content
+    invalid = validate_skill_content(content, name)
+    if invalid:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"候选版本 {vid} 内容校验未通过, 拒绝批准 - {invalid}",
+        )
     # 写盘生效: 独立事务, 避免嵌套 session(SQLite 单连接锁)
     save_skill(name, content, reason="auto_evolve")
     with db.session_scope() as s:

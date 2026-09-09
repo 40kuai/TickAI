@@ -31,6 +31,7 @@ from hermes.agents.skill_runner import LANGUAGE_DIRECTIVES, _resolve_language
 from hermes.skills.loader import (
     load_skill,
     save_skill,
+    validate_skill_content,
     SKILLS_DIR,
 )
 
@@ -207,6 +208,11 @@ class SkillEvolver(BaseAgent):
             fm_match = re.search(r"^---\s*\n.*?---\s*\n", text, re.DOTALL | re.MULTILINE)
             if fm_match:
                 text = text[fm_match.start():].strip()
+
+        # fail-closed: LLM 残片(无 frontmatter / 空正文)必须当场拒绝, 不能落候选/写盘
+        invalid = validate_skill_content(text)
+        if invalid:
+            raise EvolutionError(f"LLM 输出内容无效: {invalid}")
 
         return text
 

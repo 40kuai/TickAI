@@ -68,6 +68,33 @@ def _filename_to_name(path: Path) -> str:
     return path.stem
 
 
+def validate_skill_content(content: str, expected_name: Optional[str] = None) -> str:
+    """Validate a skill .md content (frontmatter + body). Return "" if valid,
+    otherwise a human-readable error message.
+
+    进化门禁用: LLM 生成内容必须先过此校验(fail-closed)才能落候选/获批写盘。
+    """
+    if not content or not content.strip():
+        return "技能内容为空"
+    m = _FRONTMATTER_RE.match(content)
+    if not m:
+        return "技能内容缺少 YAML frontmatter(须以 --- 开头)"
+    try:
+        meta = yaml.safe_load(m.group("meta")) or {}
+    except yaml.YAMLError as exc:
+        return f"frontmatter YAML 解析失败: {exc}"
+    if not isinstance(meta, dict):
+        return "frontmatter 必须是 YAML 映射"
+    name = meta.get("name")
+    if not name or not str(name).strip():
+        return "frontmatter 缺少 name 字段"
+    if expected_name and str(name).strip() != expected_name:
+        return f"frontmatter name 为 {name!r}, 与技能 {expected_name!r} 不一致"
+    if not m.group("body").strip():
+        return "技能正文(body)为空"
+    return ""
+
+
 # ============================================================
 # Listing
 # ============================================================

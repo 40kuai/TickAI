@@ -158,6 +158,37 @@ class SkillEvolutionApiTests(unittest.TestCase):
         res = self.client.post("/api/skills/detect_oom_killed/versions/99999/approve")
         self.assertEqual(res.status_code, 404)
 
+    # ---- 坏内容防御: LLM 生成无 frontmatter 的残片时, 必须 fail-closed ----
+    BAD_CONTENT = "Multiple pressured mounts: a JSON array of the same objects, one per mount:"
+
+    @patch("hermes.agents.skill_evolver.evolve_skill", return_value=BAD_CONTENT)
+    def test_evolve_invalid_content_returns_502(self, _mock_evolve):
+        """LLM 输出残片(无 frontmatter) → 不落 pending, 直接 502."""
+        res = self.client.post("/api/skills/detect_oom_killed/evolve")
+        self.assertEqual(res.status_code, 502)
+        self.assertIn("进化生成失败", res.json()["detail"])
+        with db.session_scope() as s:
+            self.assertIsNone(s.query(models.SkillVersion)
+                              .filter_by(status="pending").first())
+
+    def test_approve_invalid_candidate_409(self):
+        """历史坏候选(内容无 frontmatter) → 批准被拒(fail-closed), 不写盘."""
+        with db.session_scope() as s:
+            s.add(models.SkillVersion(
+                skill_name="detect_oom_killed", version=99,
+                content=self.BAD_CONTENT, diff="",
+                reason="auto_evolve", status="pending"))
+            s.flush()
+            bad_id = s.query(models.SkillVersion).filter_by(version=99).first().id
+        with patch("hermes.skills.loader.save_skill") as mock_save:
+            res = self.client.post(
+                f"/api/skills/detect_oom_killed/versions/{bad_id}/approve")
+        self.assertEqual(res.status_code, 409)
+        mock_save.assert_not_called()
+        with db.session_scope() as s:
+            row = s.query(models.SkillVersion).get(bad_id)
+            self.assertEqual(row.status, "pending")  # 未被处置, 保持可重新生成
+
 
 if __name__ == "__main__":
     unittest.main()
