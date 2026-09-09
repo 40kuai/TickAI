@@ -804,7 +804,7 @@ onMounted(loadAll)
             <table class="table">
               <thead>
                 <tr>
-                  <th>ID</th><th>服务器</th><th>场景</th><th>目标</th><th>风险</th><th>动作</th><th>状态</th>
+                  <th>ID</th><th>服务器</th><th>场景</th><th>目标</th><th>风险</th><th>动作</th><th>状态</th><th>操作</th>
                 </tr>
               </thead>
               <tbody>
@@ -820,9 +820,12 @@ onMounted(loadAll)
                   <td>
                     <span class="badge" :class="statusBadge(a.status)">{{ statusLabel(a.status) }}</span>
                   </td>
+                  <td>
+                    <button class="btn btn-outline btn-sm" @click="openDetail(a)">详情</button>
+                  </td>
                 </tr>
                 <tr v-if="!historyActions.length">
-                  <td colspan="7" class="state-tip">暂无记录</td>
+                  <td colspan="8" class="state-tip">暂无记录</td>
                 </tr>
               </tbody>
             </table>
@@ -890,7 +893,7 @@ onMounted(loadAll)
           </div>
 
           <div class="detail-block">
-            <span class="detail-label">验证结果（success={{ detailItem.success }}）</span>
+            <span class="detail-label">验证结果（success={{ detailItem.success ?? '-' }}）</span>
             <pre class="detail-pre">{{ fmtJson(detailItem.verification_result) }}</pre>
           </div>
 

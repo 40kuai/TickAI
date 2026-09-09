@@ -114,12 +114,23 @@ def _run(
     probe_cmd = detect.probe_command(scene, target)
     probe = actions.exec_ssh(server_id, probe_cmd)
     if not probe["success"]:
+        # 探测失败: 完整记录 exit_code/stderr/stdout, 供问题可查(避免仅 "探测失败: None")
+        execution = {"error": probe.get("error"),
+                     "exit_code": probe.get("exit_code"),
+                     "stderr": probe.get("stderr"),
+                     "stdout": probe.get("stdout")}
         record = _persist(server_id, scene, target, "low", action_name, "failed",
-                          triggered_by, execution={"error": probe.get("error")},
+                          triggered_by, execution=execution,
                           rendered_command=None)
+        detail = next((str(p).strip() for p in
+                       (probe.get("error"), probe.get("stderr"), probe.get("stdout"))
+                       if p), "未知原因")
+        suffix = ""
+        if probe.get("exit_code") is not None and "exit_code=" not in detail:
+            suffix = f" [exit_code={probe['exit_code']}]"
         return {"severity": "low", "status": "failed", "success": False,
                 "action_id": record.id, "action_name": action_name,
-                "reason": f"探测失败: {probe.get('error')}"}
+                "reason": f"探测失败: {detail}{suffix}"}
 
     metric = _probe_metric(scene, target, probe["stdout"])
     is_abnormal = (

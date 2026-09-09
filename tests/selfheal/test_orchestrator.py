@@ -111,6 +111,24 @@ class RunLowRiskDiskTests(_SelfHealTestCase):
             row = s.query(models.SelfHealAction).filter_by(status="failed").first()
             self.assertIsNotNone(row)
 
+    def test_probe_failure_includes_stderr_and_persists_full_execution(self):
+        # 探测命令 exit_code≠0(exec_ssh 无 error 键) → reason 含 stderr/exit_code, execution_result 落库完整
+        with _mock_exec([{"success": False, "exit_code": 1,
+                          "stderr": "Unit nginx.service could not be found.",
+                          "stdout": ""}]):
+            result = orchestrator.run_selfheal(
+                1, "process_restart", {"service": "nginx"}, "user")
+        self.assertEqual(result["status"], "failed")
+        self.assertFalse(result["success"])
+        self.assertIn("nginx.service could not be found", result["reason"])
+        self.assertIn("exit_code=1", result["reason"])
+        with db.session_scope() as s:
+            row = s.query(models.SelfHealAction).filter_by(status="failed").first()
+            self.assertIsNotNone(row)
+            exec_json = json.loads(row.execution_result)
+            self.assertEqual(exec_json["exit_code"], 1)
+            self.assertIn("nginx.service could not be found", exec_json["stderr"])
+
     def test_exec_failure_returns_failed_and_persists(self):
         # 探测 85% + AI 判定 auto → 执行失败(exec_ssh success=False) → status=failed 且落库失败记录
         import hermes.selfheal.approval as approval_mod

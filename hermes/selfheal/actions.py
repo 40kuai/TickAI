@@ -133,8 +133,13 @@ def _connect_exec(host: str, port: int, username: str, password: str,
         out = stdout.read().decode("utf-8", errors="replace")
         err = stderr.read().decode("utf-8", errors="replace")
         exit_code = stdout.channel.recv_exit_status()
-        return {"success": exit_code == 0, "exit_code": exit_code,
-                "stdout": out, "stderr": err}
+        result = {"success": exit_code == 0, "exit_code": exit_code,
+                  "stdout": out, "stderr": err}
+        if exit_code != 0:
+            # 命令失败但未抛异常: 补充可读 error(取 stderr 摘要), 供上层定位原因
+            detail = (err.strip() or out.strip() or f"exit_code={exit_code}")
+            result["error"] = f"exit_code={exit_code}: {detail[:200]}"
+        return result
     except Exception as exc:  # noqa: BLE001
         return {"success": False, "error": f"SSH error: {type(exc).__name__}: {exc}"}
     finally:

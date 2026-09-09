@@ -108,6 +108,23 @@ class ExecSshTests(unittest.TestCase):
         self.assertEqual(r["stdout"], "active")
         self.assertEqual(r["exit_code"], 0)
 
+    def test_connect_exec_exit_code_nonzero_adds_error(self):
+        # 命令 exit_code≠0 → success=False 且 error 携带 stderr 摘要(原因可查)
+        fake_stdout = unittest.mock.MagicMock()
+        fake_stdout.read.return_value = b""
+        fake_stdout.channel.recv_exit_status.return_value = 1
+        fake_stderr = unittest.mock.MagicMock()
+        fake_stderr.read.return_value = b"Unit nginx.service could not be found."
+        with patch("paramiko.SSHClient") as m:
+            client = m.return_value
+            client.exec_command.return_value = (None, fake_stdout, fake_stderr)
+            r = actions._connect_exec("10.0.0.1", 22, "root", "x", "",
+                                      "systemctl is-active nginx")
+        self.assertFalse(r["success"])
+        self.assertEqual(r["exit_code"], 1)
+        self.assertIn("exit_code=1", r["error"])
+        self.assertIn("Unit nginx.service could not be found", r["error"])
+
 
 class CleanupActionTests(unittest.TestCase):
     def setUp(self):
