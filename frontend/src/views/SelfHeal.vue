@@ -1,5 +1,5 @@
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import api from '@/api'
 
 // ====== 数据状态 ======
@@ -10,12 +10,6 @@ const stats = ref({ total_executed: 0, success: 0, success_rate: 0, pending: 0 }
 const loading = ref(false)
 const errorMsg = ref('')
 
-// ====== 手动触发表单 ======
-const form = reactive({
-  server_id: '',
-  scene: '',
-  target: ''
-})
 const running = ref(false)
 const runError = ref('')
 const runResult = ref(null)
@@ -57,6 +51,17 @@ const STATUS_LABELS = {
 function sceneLabel(name) {
   return SCENE_LABELS[name] || name || '-'
 }
+
+// 挂单原因: grade_reasons 为 JSON 字符串, 解析失败显示 '—'
+function approvalReasons(a) {
+  if (!a?.grade_reasons) return null
+  try {
+    const arr = JSON.parse(a.grade_reasons)
+    return Array.isArray(arr) && arr.length ? arr.join('；') : null
+  } catch {
+    return null
+  }
+}
 function actionLabel(name) {
   return ACTION_LABELS[name] || name || '-'
 }
@@ -93,6 +98,36 @@ function truncate(str, len = 42) {
   return s.length > len ? s.slice(0, len) + '…' : s
 }
 
+// ====== 自愈场景(运维视角聚合, 防分叉: 新增场景须同步后端 orchestrator.SCENE_ACTION) ======
+const SCENE_GROUPS = [
+  { key: 'disk', title: '磁盘空间不足', icon: '🗄', scenes: ['disk_clean', 'log_cleanup_script'],
+    desc: '扫描大文件/日志/journal/docker 残留，勾选后按风险审批清理' },
+  { key: 'process', title: '服务进程异常', icon: '♻️', scenes: ['process_restart'],
+    desc: '重启指定服务，自动 探测 → 审批 → 执行 → 验证' },
+  { key: 'cache', title: '缓存占用过高', icon: '🧹', scenes: ['cache_clean'],
+    desc: '清理系统缓存（pagecache/dentry/inode）' },
+]
+
+// ====== 全局状态: 服务器选择器(三个场景共用) + 场景表单 ======
+const serverId = ref('')
+const serviceName = ref('')  // 服务进程异常: 服务名
+const cacheMode = ref('')    // 缓存占用过高: drop_caches 模式(如 3)
+const sceneRunning = ref('') // 当前运行中的场景 key('process'/'cache'), 空=无
+const sceneError = ref('')
+const sceneResult = ref(null)
+
+// 运行结果摘要(按 status 给一句话结论)
+function sceneSummary(res) {
+  const s = res?.status
+  if (s === 'noop') return { text: '无需处理（未检测到异常）', tone: 'success' }
+  if (s === 'pending') return { text: '已生成审批单，请到「AI 审批」处理', tone: 'warning' }
+  if (s === 'rejected') return { text: '已被规则拒绝，未执行', tone: 'danger' }
+  if (s === 'failed') return { text: '执行失败', tone: 'danger' }
+  if (s === 'verified') return { text: '执行并验证通过 ✓', tone: 'success' }
+  if (s === 'executed') return { text: '已执行', tone: 'info' }
+  return { text: s || '完成', tone: 'info' }
+}
+
 // ====== 统计卡片 ======
 const statCards = computed(() => [
   { label: '已执行', value: stats.value.total_executed ?? 0, icon: '⟳', tone: 'primary' },
@@ -105,23 +140,6 @@ const statCards = computed(() => [
 function sceneOptionText(sc) {
   return `${sceneLabel(sc.name)}（${sc.name}）`
 }
-
-// 目标参数 placeholder：按所选场景的 required_target 提示
-const targetPlaceholder = computed(() => {
-  const sc = scenes.value.find((s) => s.name === form.scene)
-  if (!sc || !(sc.required_target || []).length) {
-    return '目标参数 JSON（可选）'
-  }
-  const ex = {}
-  for (const k of sc.required_target) {
-    if (k === 'service') ex[k] = 'nginx'
-    else if (k === 'mount') ex[k] = '/data'
-    else if (k === 'path') ex[k] = '/var/log/app.log'
-    else if (k === 'mode') ex[k] = '3'
-    else ex[k] = ''
-  }
-  return `必填: ${sc.required_target.join(', ')}，例如 ${JSON.stringify(ex)}`
-})
 
 // ====== 加载数据 ======
 async function loadAll() {
@@ -156,42 +174,6 @@ async function refreshActionsAndStats() {
     stats.value = statRes.data || {}
   } catch {
     /* 刷新失败时保留现有数据 */
-  }
-}
-
-// ====== 手动触发自愈 ======
-async function handleRun() {
-  if (running.value) return
-  runError.value = ''
-  runResult.value = null
-  if (!form.server_id) {
-    runError.value = '请选择服务器'
-    return
-  }
-  if (!form.scene) {
-    runError.value = '请选择场景'
-    return
-  }
-  let target
-  try {
-    target = form.target.trim() ? JSON.parse(form.target.trim()) : {}
-  } catch {
-    runError.value = '目标参数必须是合法 JSON，例如 {"service":"nginx"}'
-    return
-  }
-  running.value = true
-  try {
-    const res = await api.post('/selfheal/run', {
-      server_id: Number(form.server_id),
-      scene: form.scene,
-      target,
-    })
-    runResult.value = res.data
-    await refreshActionsAndStats()
-  } catch (err) {
-    runError.value = err.response?.data?.detail || '触发自愈失败'
-  } finally {
-    running.value = false
   }
 }
 
@@ -267,7 +249,6 @@ function fmtTarget(v) {
 }
 
 // ====== 日志清理(通道一固定脚本 + 通道二AI分析) ======
-const cleanupForm = reactive({ server_id: '', category: 'system' })
 const CLEANUP_CATEGORIES = [
   { value: 'system', label: '系统日志' },
   { value: 'service', label: '服务日志 /data/*/logs' },
@@ -276,27 +257,10 @@ const CLEANUP_CATEGORIES = [
   { value: 'all', label: '全部' },
 ]
 const cleanupRunning = ref(false)
-const cleanupError = ref('')
-const cleanupResult = ref(null)
 const scanRunning = ref(false)
 const scanResult = ref(null)
 const scanError = ref('')
 const aiPlanRunning = ref(false)
-const aiPlanError = ref('')
-const aiPlanResult = ref(null)
-const strategyJson = ref('')
-
-// ====== 日志清理: 折叠面板与说明 ======
-const showQuickCleanup = ref(false) // 快捷清理(原固定脚本)
-const showAdvanced = ref(false)     // 高级模式(手写 JSON)
-// 清理类别说明
-const CLEANUP_CATEGORY_DESC = {
-  system: '系统日志(/var/log 下按策略清理)',
-  service: '服务日志(/data/*/logs 下按策略清理)',
-  'docker-log': 'Docker 容器 json.log 截断',
-  'docker-prune': '回收停止容器与 dangling 镜像（高风险，强制人工审批）',
-  all: '整批执行以上全部类别',
-}
 
 // ====== 日志清理向导: 勾选状态 + 策略生成 ======
 // 勾选状态: Map<selectionKey, {type, params, label, risk}>
@@ -398,14 +362,14 @@ const wizardStrategy = computed(() => ({
 }))
 
 // 向导可提交条件: 已选服务器 且 至少勾选一项
-const canSubmitWizard = computed(() => Boolean(cleanupForm.server_id) && selected.value.size > 0)
+const canSubmitWizard = computed(() => Boolean(serverId) && selected.value.size > 0)
 
 // 提交向导(ai-plan), 结果结构化展示
 async function handleSubmitWizard() {
   if (wizardRunning.value) return
   wizardError.value = ''
   wizardResult.value = null
-  if (!cleanupForm.server_id) {
+  if (!serverId) {
     wizardError.value = '请选择服务器'
     return
   }
@@ -420,7 +384,7 @@ async function handleSubmitWizard() {
   wizardRunning.value = true
   try {
     const res = await api.post('/selfheal/ai-plan', {
-      server_id: Number(cleanupForm.server_id),
+      server_id: Number(serverId),
       strategy: wizardStrategy.value,
     })
     wizardResult.value = res.data
@@ -482,87 +446,66 @@ function rowsForTab(key) {
 
 const activeFileRows = computed(() => rowsForTab(fileTab.value))
 
-// 触发固定清理脚本(统一审批出口: auto 直执/approval 挂单/reject 拒绝)
-async function handleCleanup() {
-  if (cleanupRunning.value) return
-  cleanupError.value = ''
-  cleanupResult.value = null
-  if (!cleanupForm.server_id) { cleanupError.value = '请选择服务器'; return }
-  cleanupRunning.value = true
+// 运行非磁盘场景(process/cache): 按场景组动态组装 target
+async function runScene(sceneKey) {
+  if (sceneRunning.value) return
+  sceneError.value = ''
+  sceneResult.value = null
+  if (!serverId.value) { sceneError.value = '请选择服务器'; return }
+  let scene, target
+  if (sceneKey === 'process') {
+    scene = 'process_restart'
+    if (!serviceName.value.trim()) { sceneError.value = '请输入服务名'; return }
+    target = { service: serviceName.value.trim() }
+  } else if (sceneKey === 'cache') {
+    scene = 'cache_clean'
+    if (!cacheMode.value.trim()) { sceneError.value = '请输入模式（如 3）'; return }
+    target = { mode: cacheMode.value.trim() }
+  } else {
+    return
+  }
+  sceneRunning.value = sceneKey
   try {
     const res = await api.post('/selfheal/run', {
-      server_id: Number(cleanupForm.server_id),
-      scene: 'log_cleanup_script',
-      target: { category: cleanupForm.category, mount: '/' },
+      server_id: Number(serverId.value), scene, target,
     })
-    cleanupResult.value = res.data
+    sceneResult.value = res.data
     await refreshActionsAndStats()
   } catch (err) {
-    cleanupError.value = err.response?.data?.detail || '触发清理失败'
+    sceneError.value = err.response?.data?.detail || '触发自愈失败'
   } finally {
-    cleanupRunning.value = false
-    showQuickCleanup.value = true // 请求完成时展开面板,避免结果被隐藏
+    sceneRunning.value = false
   }
 }
+
+// 场景待办角标: 该组场景的 pending 数
+const pendingByGroup = computed(() => {
+  const map = {}
+  for (const g of SCENE_GROUPS) map[g.key] = 0
+  for (const a of actions.value) {
+    if (a.status !== 'pending') continue
+    for (const g of SCENE_GROUPS) {
+      if (g.scenes.includes(a.scene)) map[g.key]++
+    }
+  }
+  return map
+})
 
 // 只读扫描
 async function handleScan() {
   if (scanRunning.value) return
   scanError.value = ''
   scanResult.value = null
-  if (!cleanupForm.server_id) { scanError.value = '请选择服务器'; return }
+  if (!serverId) { scanError.value = '请选择服务器'; return }
   scanRunning.value = true
   try {
-    const res = await api.post('/selfheal/scan-log', { server_id: Number(cleanupForm.server_id) })
+    const res = await api.post('/selfheal/scan-log', { server_id: Number(serverId) })
     scanResult.value = res.data
   } catch (err) {
     scanError.value = err.response?.data?.detail || '扫描失败'
   } finally {
     scanRunning.value = false
   }
-}
-
-// 提交 AI 策略(统一审批出口: auto 直执/approval 挂单/reject 拒绝)
-async function handleAiPlan() {
-  if (aiPlanRunning.value) return
-  aiPlanError.value = ''
-  aiPlanResult.value = null
-  if (!cleanupForm.server_id) { aiPlanError.value = '请选择服务器'; return }
-  let strategy
-  try {
-    strategy = strategyJson.value.trim() ? JSON.parse(strategyJson.value.trim()) : {}
-  } catch {
-    aiPlanError.value = '策略必须是合法 JSON'
-    return
-  }
-  aiPlanRunning.value = true
-  try {
-    const res = await api.post('/selfheal/ai-plan', {
-      server_id: Number(cleanupForm.server_id),
-      strategy,
-    })
-    aiPlanResult.value = res.data
-    await refreshActionsAndStats()
-  } catch (err) {
-    aiPlanError.value = err.response?.data?.detail || '提交策略失败'
-  } finally {
-    showAdvanced.value = true // 请求完成时展开面板,避免结果被隐藏
-    aiPlanRunning.value = false
-  }
-}
-
-// 把扫描结果预填为策略示例(帮助用户手写/让 LLM 出策略)
-function fillStrategyExample() {
-  const items = []
-  if (scanResult.value?.journal?.disk_used) {
-    items.push({ type: 'journal_vacuum', size: '200' })
-  }
-  if (scanResult.value?.docker_logs?.length) {
-    for (const dl of scanResult.value.docker_logs.slice(0, 3)) {
-      items.push({ type: 'docker_log_truncate', path: dl.path })
-    }
-  }
-  strategyJson.value = JSON.stringify({ mount: '/', items }, null, 2)
 }
 
 onMounted(loadAll)
