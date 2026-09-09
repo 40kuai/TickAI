@@ -241,7 +241,7 @@ def approve_skill_version(name: str, vid: int, user=Depends(get_current_user)):
             )
         content = row.content
     # fail-closed: 候选内容必须为完整技能(有效 frontmatter + 正文), 坏候选拒绝写盘
-    from hermes.skills.loader import validate_skill_content
+    from hermes.skills.loader import deactivate_others, validate_skill_content
     invalid = validate_skill_content(content, name)
     if invalid:
         raise HTTPException(
@@ -253,7 +253,10 @@ def approve_skill_version(name: str, vid: int, user=Depends(get_current_user)):
     save_skill(name, content, reason="auto_evolve", record_version=False)
     with db.session_scope() as s:
         row = s.query(models.SkillVersion).filter_by(id=vid, skill_name=name).first()
-        row.status = "active"  # 候选已批准并成为线上版本; 回滚才用 rolled_back
+        row.status = "active"  # 候选已批准并成为线上版本
+        keep_version = row.version
+    # active 唯一: 被覆盖的旧线上版本标记 rolled_back
+    deactivate_others(name, keep_version=keep_version)
     return {"status": "approved", "version_id": vid}
 
 
@@ -282,8 +285,12 @@ def reject_skill_version(name: str, vid: int, user=Depends(get_current_user)):
 
 @router.post("/{name}/versions/{vid}/rollback")
 def rollback_skill_version(name: str, vid: int, user=Depends(get_current_user)):
-    """回滚到历史版本: 以该版本内容生成新的 active 版本(不破坏既有历史)."""
-    from hermes.skills.loader import save_skill
+    """回滚到历史版本: 目标版本内容写盘并成为线上(active), 旧 active 转 rolled_back."""
+    from hermes.skills.loader import (
+        deactivate_others,
+        save_skill,
+        validate_skill_content,
+    )
 
     with db.session_scope() as s:
         row = (
@@ -298,7 +305,7 @@ def rollback_skill_version(name: str, vid: int, user=Depends(get_current_user)):
             )
         content = row.content
         target = row.version
-        # 防无效回滚: 目标内容与当前线上(最新 active 版本)一致时拒绝, 避免产生冗余版本
+        # 防无效回滚: 目标内容与当前线上(active 版本)一致时拒绝, 避免冗余
         cur = (
             s.query(models.SkillVersion)
             .filter_by(skill_name=name, status="active")
@@ -310,6 +317,18 @@ def rollback_skill_version(name: str, vid: int, user=Depends(get_current_user)):
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"版本 {vid} 的内容与当前线上一致, 无需回滚",
             )
-    # 独立事务写盘, 避免嵌套 session
-    save_skill(name, content, reason="rollback")
+    # fail-closed: 回滚内容必须为完整技能, 坏版本拒绝写盘
+    invalid = validate_skill_content(content, name)
+    if invalid:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"版本 {vid} 内容校验未通过, 拒绝回滚 - {invalid}",
+        )
+    # 独立事务写盘; 不新增版本记录, 目标版本本身流转为 active
+    save_skill(name, content, reason="rollback", record_version=False)
+    with db.session_scope() as s:
+        row = s.query(models.SkillVersion).filter_by(id=vid, skill_name=name).first()
+        row.status = "active"
+    # active 唯一: 被回滚覆盖的旧线上版本标记 rolled_back
+    deactivate_others(name, keep_version=target)
     return {"status": "rolled_back", "version_id": vid, "target_version": target}

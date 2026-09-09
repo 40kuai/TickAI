@@ -63,6 +63,30 @@ def _parse_skill(content: str) -> Tuple[Dict[str, Any], str]:
     return meta, m.group("body").strip()
 
 
+def deactivate_others(skill_name: str, keep_version: int) -> int:
+    """Ensure active-version uniqueness: mark every other active version rolled_back.
+
+    写盘生效(approve/rollback)后调用, keep_version 为刚成为线上的版本号。
+    保证同一技能在同一时刻只有一个 active(当前线上)版本。
+    """
+    from sqlalchemy import update
+
+    from hermes.data import db
+    from hermes.data.models import SkillVersion
+
+    with db.session_scope() as s:
+        result = s.execute(
+            update(SkillVersion)
+            .where(
+                SkillVersion.skill_name == skill_name,
+                SkillVersion.status == "active",
+                SkillVersion.version != keep_version,
+            )
+            .values(status="rolled_back")
+        )
+        return result.rowcount or 0
+
+
 def _filename_to_name(path: Path) -> str:
     """Convert a filename like 'detect_oom.md' to skill name 'detect_oom'."""
     return path.stem

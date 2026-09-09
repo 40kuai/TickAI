@@ -319,7 +319,7 @@ onMounted(loadSkills)
                       @click="versionAction(v, 'reject')"
                     >拒绝</button>
                   </div>
-                  <div v-else-if="v.status === 'active' && v.version !== 1" class="version-actions">
+                  <div v-else-if="v.status !== 'active'" class="version-actions">
                     <button
                       class="btn btn-sm btn-outline"
                       :disabled="versionBusy[v.id]"

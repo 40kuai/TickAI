@@ -4,7 +4,7 @@
 - POST /{name}/evolve                     生成候选(pending), 不写盘
 - POST /{name}/versions/{vid}/approve     批准生效(写盘+状态流转)
 - POST /{name}/versions/{vid}/reject      拒绝(不写盘)
-- POST /{name}/versions/{vid}/rollback    回滚(生成新 active 版本)
+- POST /{name}/versions/{vid}/rollback    回滚(目标版本转 active, 旧 active 转 rolled_back, 不插新版本)
 - 非 pending approve/reject → 409; LLM 失败 → 502
 
 关键安全约束: 测试绝不写真实技能库 —— mock save_skill 拦截写盘,
@@ -44,6 +44,17 @@ NEW_CONTENT = (
 )
 
 
+INITIAL_CONTENT = (
+    "---\n"
+    "name: detect_oom_killed\n"
+    "description: original version\n"
+    "trigger: user_initiated\n"
+    "severity: warning\n"
+    "---\n\n"
+    "# original instructions\n"
+)
+
+
 class SkillEvolutionApiTests(unittest.TestCase):
     def setUp(self):
         # skill_versions 表结构随 P2 加了 status 列, 重建测试表保证最新 schema
@@ -52,10 +63,10 @@ class SkillEvolutionApiTests(unittest.TestCase):
             conn.execute(text("DROP TABLE IF EXISTS skill_versions"))
         db.init_db()
         with db.session_scope() as s:
-            # 初始 active v1
+            # 初始 active v1 (内容必须为有效技能, 否则回滚/内容校验会正确拒绝)
             s.add(models.SkillVersion(
                 skill_name="detect_oom_killed", version=1,
-                content="# v1", diff="", reason="initial", status="active"))
+                content=INITIAL_CONTENT, diff="", reason="initial", status="active"))
         init_default_user()
         admin = get_user("admin")
         sid = create_session(admin)
@@ -109,6 +120,10 @@ class SkillEvolutionApiTests(unittest.TestCase):
             row = s.query(models.SkillVersion).get(vid)
             self.assertEqual(row.status, "active")  # 候选已成为线上版本
             self.assertEqual(s.query(models.SkillVersion).count(), 2)  # 初始 v1 + 候选, 无重复
+            v1 = s.query(models.SkillVersion).filter_by(version=1).first()
+            self.assertEqual(v1.status, "rolled_back")  # 被覆盖的旧线上
+            self.assertEqual(
+                s.query(models.SkillVersion).filter_by(status="active").count(), 1)  # active 唯一
 
     @patch("hermes.agents.skill_evolver.evolve_skill", return_value=NEW_CONTENT)
     @patch("hermes.skills.loader.save_skill")
@@ -138,6 +153,12 @@ class SkillEvolutionApiTests(unittest.TestCase):
         self.assertEqual(mock_save.call_count, 2)
         args = mock_save.call_args
         self.assertEqual(args[1]["reason"], "rollback")
+        with db.session_scope() as s:
+            v1 = s.query(models.SkillVersion).filter_by(version=1).first()
+            self.assertEqual(v1.status, "active")  # 回滚目标成为线上
+            self.assertEqual(
+                s.query(models.SkillVersion).filter_by(status="active").count(), 1)  # active 唯一
+            self.assertEqual(s.query(models.SkillVersion).count(), 2)  # 不产生新版本记录
 
     @patch("hermes.skills.loader.save_skill")
     def test_rollback_same_content_returns_409(self, mock_save):
@@ -147,6 +168,21 @@ class SkillEvolutionApiTests(unittest.TestCase):
         res = self.client.post(f"/api/skills/detect_oom_killed/versions/{v1_id}/rollback")
         self.assertEqual(res.status_code, 409)
         self.assertIn("无需回滚", res.json()["detail"])
+        mock_save.assert_not_called()
+
+    @patch("hermes.skills.loader.save_skill")
+    def test_rollback_invalid_candidate_409(self, mock_save):
+        """回滚到内容无效的历史版本(无 frontmatter) → 409, 不写盘(fail-closed)."""
+        with db.session_scope() as s:
+            s.add(models.SkillVersion(
+                skill_name="detect_oom_killed", version=99,
+                content=self.BAD_CONTENT, diff="",
+                reason="auto_evolve", status="rejected"))
+            s.flush()
+            bad_id = s.query(models.SkillVersion).filter_by(version=99).first().id
+        res = self.client.post(f"/api/skills/detect_oom_killed/versions/{bad_id}/rollback")
+        self.assertEqual(res.status_code, 409)
+        self.assertIn("内容校验未通过", res.json()["detail"])
         mock_save.assert_not_called()
 
     @patch("hermes.agents.skill_evolver.evolve_skill", return_value=NEW_CONTENT)

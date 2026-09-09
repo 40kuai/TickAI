@@ -1,19 +1,19 @@
 ---
 name: "diagnose_prometheus_anomaly"
-description: "Read-only diagnostic skill for nfc-* services. Use whenever the user asks to check, inspect, monitor, or diagnose the health/status/anomalies/performance of any nfc service (e.g. nfc-finance, nfc-fund, nfc-user-center), or mentions monitoring/巡检/health checks for nfc. Primary method: read-only Kubernetes inspection (list_k8s_contexts, check_k8s_deployments, check_k8s_pods, check_k8s_services, check_k8s_events, check_k8s_nodes). If ARMS/Prometheus metric tools (prometheus_service_discovery, prometheus_service_health, prometheus_metric_query) are present, extend the diagnosis with them. Never uses mutating commands."
+description: "nfc-* 系列服务的只读诊断技能。当用户查询/巡检/诊断任何 nfc 服务（如 nfc-finance、nfc-fund、nfc-user-center）的健康状态、运行异常、监控、性能，或提到监控/巡检/健康检查时使用。主要方法：只读 Kubernetes 巡检（list_k8s_contexts、check_k8s_deployments、check_k8s_pods、check_k8s_services、check_k8s_events、check_k8s_nodes）。若当前工具集中存在 ARMS/Prometheus 指标工具（prometheus_service_discovery、prometheus_service_health、prometheus_metric_query），则用它们补充诊断。禁止使用任何变更类命令。"
 trigger: "user_initiated"
 severity: "info"
 ---
 
-# Read-only Diagnosis of nfc SERVICE HEALTH AND Anomalies
+# nfc 服务健康与异常只读诊断
 
-## Goal
+## 目标
 
-When the user asks about nfc service health, status, or anomalies, use only read-only Kubernetes inspection tools to determine the state of `nfc-*` workloads and produce a structured severity-sorted report. If ARMS/Prometheus metric tools are available in the current toolset, use them to complement the Kubernetes findings with request/database/SQL/JVM/system metrics. Never modify, exec into, or write to any cluster resource.
+当用户询问 nfc 服务健康、状态或异常时，仅使用只读的 Kubernetes 巡检工具判断 `nfc-*` 负载的状态，并产出按严重程度排序的结构化报告。如果当前工具集中存在 ARMS/Prometheus 指标工具，用它们以请求/数据库/SQL/JVM/系统指标补充 Kubernetes 结论。绝不修改、exec 或写入任何集群资源。
 
-## When to use
+## 使用时机
 
-Use this skill for ANY request that semantically asks about nfc service health or monitoring, including:
+本技能适用于任何语义上询问 nfc 服务健康或监控的请求，包括但不限于：
 
 - "看看 nfc 服务有什么异常" / "check nfc services for anomalies"
 - "检查一下所有 nfc 服务的健康状态" / "check health of all nfc services"
@@ -22,13 +22,13 @@ Use this skill for ANY request that semantically asks about nfc service health o
 - "nfc 服务状态怎么样 / 是否正常 / 有没有问题"
 - "查询 nfc 服务的监控/指标/性能 / Prometheus 上有没有告警"
 - "帮我巡检一下 nfc 服务" / "monitor nfc services"
-- Any mention of "nfc", "ARMS", "Prometheus", "巡检", "健康检查", "监控巡检" in the context of checking services
+- 任何在"检查服务"语境下提到 "nfc"、"ARMS"、"Prometheus"、"巡检"、"健康检查"、"监控巡检" 的请求
 
-Do not skip the skill because of phrasing differences (e.g. "查一下", "看下", "检测", "diagnose", "health check"). If the semantics are "nfc service health/monitoring", run this skill.
+不要因为措辞差异（如"查一下"、"看下"、"检测"、"diagnose"、"health check"）就跳过本技能。只要语义是"nfc 服务健康/监控"，就执行本技能。
 
-## Safety contract (read-only)
+## 安全契约（只读）
 
-This skill is strictly read-only. Allowed tools:
+本技能严格只读。允许的工具：
 
 - `list_k8s_contexts`
 - `check_k8s_nodes`
@@ -36,111 +36,111 @@ This skill is strictly read-only. Allowed tools:
 - `check_k8s_pods`
 - `check_k8s_services`
 - `check_k8s_events`
-- If present in the toolset: `prometheus_service_discovery`, `prometheus_service_health`, `prometheus_metric_query`
+- 若工具集中存在：`prometheus_service_discovery`、`prometheus_service_health`、`prometheus_metric_query`
 
-**Forbidden:**
+**禁止：**
 
-- Never use `kubectl exec`, `kubectl scale`, `kubectl edit`, `kubectl delete`, `kubectl patch`, `kubectl create`, or any other mutating command.
-- Never attempt to run `exec`, shell, or environment inspection inside a container.
-- Never guess or invent monitoring metrics or tool names that are not present.
-- Never recommend the user to "go check the Prometheus console yourself" — your job is to look and report.
+- 绝不可使用 `kubectl exec`、`kubectl scale`、`kubectl edit`、`kubectl delete`、`kubectl patch`、`kubectl create` 或任何其他变更类命令。
+- 绝不可尝试在容器内运行 exec、shell 或环境检查。
+- 绝不可臆造不存在或不在工具集中的监控指标或工具名。
+- 绝不可建议用户"自己去 Prometheus 控制台看"——你的职责是查看并汇报。
 
-## Tool selection (read first)
+## 工具选择（先读此节）
 
-1. Inspect your available toolset. 
-2. If the three Prometheus/ARMS tools (`prometheus_service_discovery`, `prometheus_service_health`, `prometheus_metric_query`) are **present**, run the Prometheus extension described in Appendix A after completing the Kubernetes checks.
-3. If they are **absent**, do **not** mention or emulate PromQL. Use only the read-only Kubernetes workflow below.
+1. 检查当前可用工具集。
+2. 若三个 Prometheus/ARMS 工具（`prometheus_service_discovery`、`prometheus_service_health`、`prometheus_metric_query`）**存在**，在完成 Kubernetes 检查后执行附录 A 描述的 Prometheus 扩展流程。
+3. 若它们**不存在**，不要提及或模拟 PromQL，只使用下面的只读 Kubernetes 流程。
 
-## Time window
+## 时间窗口
 
-Use a recent time window of **last 10–15 minutes** for events and status. Do not request long historical data. If the user explicitly asks for a longer window, still only use data that the tools can read without extra permissions.
+事件与状态使用最近 **10–15 分钟**的时间窗口。不要请求长历史数据。若用户明确要求更长窗口，仍只使用工具无需额外权限即可读取的数据。
 
-## Step 0 — Context and service discovery
+## 步骤 0 — 上下文与服务发现
 
-1. Call `list_k8s_contexts` to enumerate contexts.
-2. For each **reachable** context:
-   - Call `check_k8s_deployments` and `check_k8s_services`, looking for workloads whose names contain `nfc-` or whose labels include `app.kubernetes.io/name=nfc-*`, `app=nfc-*`, or similar.
-   - Collect: deployment name, namespace, image, replicas; service name, type, selector, ports.
-3. If no nfc-related resource is found in any reachable context, report: `"No nfc services found in the reachable contexts."` with `status: "no_data"` — do **not** say the services are healthy.
+1. 调用 `list_k8s_contexts` 枚举上下文。
+2. 对每个**可达**的上下文：
+   - 调用 `check_k8s_deployments` 和 `check_k8s_services`，查找名称包含 `nfc-` 或标签包含 `app.kubernetes.io/name=nfc-*`、`app=nfc-*` 之类的负载。
+   - 收集：deployment 名称、命名空间、镜像、副本数；service 名称、类型、selector、端口。
+3. 若任何可达上下文中都找不到 nfc 相关资源，报告：`"No nfc services found in the reachable contexts."`，`status: "no_data"` —— **不要**说服务是健康的。
 
-If two contexts exist and one is unreachable (e.g. connection refused), list it as `contexts_unreachable` and continue with the reachable one(s). Never block the whole diagnosis because one context is down.
+若存在两个上下文且其中一个不可达（如连接拒绝），将其列入 `contexts_unreachable` 并继续检查可达的上下文。绝不让单个上下文故障阻塞整个诊断。
 
-## Step 1 — Deployment health
+## 步骤 1 — Deployment 健康
 
-For each nfc deployment, check:
+对每个 nfc deployment，检查：
 
-- `spec.replicas` vs `status.availableReplicas` and `status.readyReplicas`.
-- `status.observedGeneration` vs `metadata.generation` (rollout progress).
-- Deployment conditions (e.g. `Available`, `Progressing`).
+- `spec.replicas` 对比 `status.availableReplicas` 与 `status.readyReplicas`。
+- `status.observedGeneration` 对比 `metadata.generation`（滚动发布进度）。
+- Deployment 条件（如 `Available`、`Progressing`）。
 
-Anomaly rules:
+异常规则：
 
-| Condition | Severity |
+| 条件 | 严重程度 |
 |---|---|
-| `availableReplicas < spec.replicas` | `critical` if 0 ready, else `warning` |
-| `observedGeneration < generation` (rollout stuck/not progressing) | `warning` |
-| Deployment condition `Available=False` | `critical` if no available replicas, else `warning` |
-| Deployment condition `Progressing=False` (rollout stalled) | `warning` |
+| `availableReplicas < spec.replicas` | 0 就绪则 `critical`，否则 `warning` |
+| `observedGeneration < generation`（滚动发布卡住/未推进） | `warning` |
+| Deployment 条件 `Available=False` | 无可用副本则 `critical`，否则 `warning` |
+| Deployment 条件 `Progressing=False`（滚动发布停滞） | `warning` |
 
-Record `current_value` like `"2/3"` (ready/desired) and `expected_value` like `"3/3"`.
+`current_value` 记录如 `"2/3"`（就绪/期望），`expected_value` 记录如 `"3/3"`。
 
-## Step 2 — Pod health
+## 步骤 2 — Pod 健康
 
-Call `check_k8s_pods` for nfc pods (filter by name or label, all namespaces if needed). For each pod with a name matching `nfc-*`, examine:
+对 nfc pod（按名称或标签过滤，必要时全命名空间）调用 `check_k8s_pods`。对每个名称匹配 `nfc-*` 的 pod，检查：
 
-1. **Pod phase / container states:**
+1. **Pod 阶段 / 容器状态：**
    - `CrashLoopBackOff` → `critical`
    - `ImagePullBackOff` / `ErrImagePull` → `critical`
-   - `CreateContainerConfigError` or `CreateContainerError` → `critical` (likely missing ConfigMap/Secret/env)
-   - `Pending` → `warning` (may be scheduling or resource related)
-   - `Terminating` for more than 5 minutes → `warning`
-   - `Running` but not ready → `critical` if no other ready replica, else `warning`
-2. **Restart counts:** each container’s `restartCount`. Repeated restarts (>0 in the window) with last termination reason `OOMKilled` → `critical`; other repeated restarts → `warning`.
-3. **Last terminated state:** record reason (Error, OOMKilled, etc.) as evidence.
+   - `CreateContainerConfigError` 或 `CreateContainerError` → `critical`（可能是 ConfigMap/Secret/env 缺失）
+   - `Pending` → `warning`（可能与调度或资源有关）
+   - `Terminating` 超过 5 分钟 → `warning`
+   - `Running` 但未就绪 → 无其他就绪副本则 `critical`，否则 `warning`
+2. **重启次数：** 每个容器的 `restartCount`。窗口内重复重启（>0）且最近终止原因为 `OOMKilled` → `critical`；其他重复重启 → `warning`。
+3. **最近终止状态：** 记录原因（Error、OOMKilled 等）作为证据。
 
-For each anomalous pod, capture:
-- `resource`: `namespace/pod`
-- `container` name
-- `current_value`: `RestartCount=5, LastState=CrashLoopBackOff`
-- `expected_value`: `Running and Ready`
+对每个异常 pod，记录：
+- `resource`：`namespace/pod`
+- `container` 名称
+- `current_value`：`RestartCount=5, LastState=CrashLoopBackOff`
+- `expected_value`：`Running and Ready`
 
-## Step 3 — Service / endpoint health
+## 步骤 3 — Service / 端点健康
 
-Call `check_k8s_services` for services named `nfc-*`. For each service:
+对名称匹配 `nfc-*` 的 service 调用 `check_k8s_services`。对每个 service：
 
-- Check `type` (ClusterIP/NodePort/LoadBalancer).
-- Check whether the service selector matches the labels on the nfc pods.
-- Check for ready endpoints:
-  - If the service has no ready backend endpoints while nfc pods exist but are not Ready → `critical` (no traffic path).
-  - If there are ready endpoints → `normal`.
-- If a LoadBalancer is used but the external IP is not assigned (`<pending>`) → `warning`.
+- 检查 `type`（ClusterIP/NodePort/LoadBalancer）。
+- 检查 service selector 是否匹配 nfc pod 的标签。
+- 检查就绪端点：
+  - service 无就绪后端端点，但 nfc pod 存在且未就绪 → `critical`（无流量路径）。
+  - 存在就绪端点 → `normal`。
+- 使用 LoadBalancer 但外部 IP 未分配（`<pending>`）→ `warning`。
 
-## Step 4 — Events
+## 步骤 4 — 事件
 
-Call `check_k8s_events` and filter for nfc-related resources in the last 10–15 minutes. Look for:
+调用 `check_k8s_events` 并过滤最近 10–15 分钟内 nfc 相关资源的事件。关注：
 
-- `FailedScheduling` (resource shortage / node selectors / taints)
-- `Unhealthy` (liveness/readiness probe failures)
-- `BackOff` / `CrashLoopBackOff` (container restarts)
+- `FailedScheduling`（资源不足 / 节点选择器 / 污点）
+- `Unhealthy`（存活/就绪探针失败）
+- `BackOff` / `CrashLoopBackOff`（容器重启）
 - `OOMKilling`
-- `FailedMount` (volume/config errors)
-- `Pulling` → `Pulled` (image issues)
+- `FailedMount`（卷/配置错误）
+- `Pulling` → `Pulled`（镜像问题）
 
-Use the most recent events as evidence in the report. Do not report stale events outside the window.
+报告中使用最近的事件作为证据。不要报告窗口之外的历史事件。
 
-## Step 5 — Node / system health (when relevant)
+## 步骤 5 — 节点 / 系统健康（相关时）
 
-Call `check_k8s_nodes` to understand node-level context:
+调用 `check_k8s_nodes` 了解节点级上下文：
 
-- `NotReady` condition → `warning`/`critical` depending on impact.
-- `MemoryPressure`, `DiskPressure`, `PIDPressure` → `warning`.
-- If nfc pods are `Pending` with `FailedScheduling` events, attribute the cause (resource requests vs node allocatable) to the node pressure.
+- `NotReady` 条件 → 视影响为 `warning`/`critical`。
+- `MemoryPressure`、`DiskPressure`、`PIDPressure` → `warning`。
+- 若 nfc pod 处于 `Pending` 且有 `FailedScheduling` 事件，将原因（资源请求 vs 节点可分配）归于节点压力。
 
-This step is optional if pods/deployments already show a clear anomaly, but include it when the anomaly is `Pending` or when OOM/restarts suggest resource limits.
+若 pod/deployment 已明确显示异常，本步骤可选，但异常为 `Pending` 或重启/OOM 疑似资源限制时必须包含本步骤。
 
-## Step 6 — Synthesize and report
+## 步骤 6 — 汇总与报告
 
-Map findings to categories:
+将发现映射到分类：
 
 - `deployment_availability`
 - `pod_status`
@@ -149,21 +149,21 @@ Map findings to categories:
 - `resource_pressure`
 - `events`
 
-Severity assignment:
+严重程度分配：
 
-| Severity | Criteria |
+| 严重程度 | 判定标准 |
 |---|---|
-| `critical` | CrashLoopBackOff, ImagePullBackOff, CreateContainerConfigError, OOMKilled, no available replicas, no ready endpoints, readiness failing on all replicas |
-| `warning` | restarts > 0 but service still serving, rollout stuck, not-ready pod with other ready replicas, node pressure, unmounted volumes, Pending pods |
-| `info` | any other noteworthy observation (e.g. image tag `latest`, single replica without HPA) |
-| `normal` | only when there is actual data proving the resource is fine |
-| `no_data` | empty result — never call it normal |
+| `critical` | CrashLoopBackOff、ImagePullBackOff、CreateContainerConfigError、OOMKilled、无可用副本、无就绪端点、全部副本就绪探针失败 |
+| `warning` | 重启 > 0 但服务仍在提供流量、滚动发布停滞、有其他就绪副本的未就绪 pod、节点压力、卷未挂载、Pending pod |
+| `info` | 其他值得注意的观察（如镜像 tag `latest`、无 HPA 的单副本） |
+| `normal` | 仅当有实际数据证明资源正常时才可用 |
+| `no_data` | 空结果——绝不称之为 normal |
 
-**Report early:** if a `critical` anomaly is found, proceed to finish a concise report as soon as the critical items are confirmed; do not run every possible check if the critical evidence is already compelling. Aim for 2–4 tool calls minimum, then produce the report.
+**尽早报告：** 若发现 `critical` 异常，确认关键项后尽快输出精简报告；关键证据已充分时不必跑完所有检查。最少 2–4 次工具调用后即可产出报告。
 
-## Output format
+## 输出格式
 
-Return a single JSON object using lowercase keys; any free-form `message`/`suggestion` may be in the user’s language or English, but keep technical fields (`namespace`, `pod`, `resource`, `category`, `severity`) as identifiers.
+返回单个 JSON 对象，使用小写键；`message`/`suggestion` 等自由文本可用用户语言或英文，但技术字段（`namespace`、`pod`、`resource`、`category`、`severity`）作为标识符保留。
 
 ```json
 {
@@ -191,8 +191,8 @@ Return a single JSON object using lowercase keys; any free-form `message`/`sugge
       "current_value": "CrashLoopBackOff, restartCount=7",
       "expected_value": "Running and Ready",
       "severity": "critical",
-      "message": "nfc-finance pod enters CrashLoopBackOff with repeated restarts.",
-      "suggestion": "Verify the container environment (env vars, ConfigMap, Secret) and readiness probe configuration; check startup logs if available.",
+      "message": "nfc-finance pod 持续 CrashLoopBackOff 并多次重启。",
+      "suggestion": "检查容器环境（env 变量、ConfigMap、Secret）与就绪探针配置；有启动日志时查看启动日志。",
       "evidence": [
         "event: BackOff backing off restarting failed container",
         "lastState.terminated.reason=Error"
@@ -206,8 +206,8 @@ Return a single JSON object using lowercase keys; any free-form `message`/`sugge
       "current_value": "0/1",
       "expected_value": "1/1",
       "severity": "critical",
-      "message": "nfc-finance has 0 available replicas.",
-      "suggestion": "Inspect the crashing container's configuration and image; check recent rollouts.",
+      "message": "nfc-finance 可用副本数为 0。",
+      "suggestion": "检查崩溃容器的配置与镜像；检查最近的发布记录。",
       "evidence": ["status.availableReplicas=0"]
     }
   ],
@@ -236,68 +236,68 @@ Return a single JSON object using lowercase keys; any free-form `message`/`sugge
 }
 ```
 
-If no anomalies are found and all checks have real data, set `summary.anomalies_found` to `0` and `summary.severity` to `"normal"`.
+若未发现异常且所有检查都有真实数据，设置 `summary.anomalies_found` 为 `0`、`summary.severity` 为 `"normal"`。
 
-## Edge cases
+## 边界情况
 
-- **Unreachable context:** include it in `contexts_unreachable`; do not invent data. If **no** context is reachable, return a short report stating `"All contexts unreachable"` with `no_data`.
-- **No nfc resources:** return `scope.nfc_services_found: []` and `summary.severity: "info"` with message `"No nfc services found in reachable contexts"`. Do **not** call it normal.
-- **Tool missing:** if a listed tool is not available, only use the available read-only tools and state which checks could not be performed. Never fabricate outputs.
-- **Multiple namespaces:** always include `namespace` in `resource` and in `evidence`.
-- **Only some replicas bad:** distinguish per-pod/per-node anomalies; do not mark the entire deployment critical if the service still has ready replicas.
-- **Empty pod list with deployments present:** report `no_data` and suggest checking the namespace or label selector; do not say healthy.
-- **Language:** Always execute the diagnostic. Never ask the user to clarify the language or to translate anything. Answer in the user’s own language if that language is other than English.
+- **上下文不可达：** 将其列入 `contexts_unreachable`；不要臆造数据。若**所有**上下文均不可达，返回简短报告，说明 `"All contexts unreachable"`，`no_data`。
+- **无 nfc 资源：** 返回 `scope.nfc_services_found: []`，`summary.severity: "info"`，message 为 `"No nfc services found in reachable contexts"`。**不要**称之为 normal。
+- **工具缺失：** 若列出的工具不可用，只使用可用的只读工具，并说明哪些检查未能执行。绝不虚构输出。
+- **多命名空间：** 始终在 `resource` 和 `evidence` 中包含 `namespace`。
+- **部分副本异常：** 区分单个 pod/节点的异常；服务仍有就绪副本时，不要把整个 deployment 标记为 critical。
+- **存在 deployment 但 pod 列表为空：** 报告 `no_data`，建议检查命名空间或标签选择器；不要说健康。
+- **语言：** 始终执行诊断。绝不让用户澄清语言或翻译任何内容。用用户自己的语言回答（若该语言非中文）。
 
-## What NOT to do
+## 禁止事项
 
-- Do **not** ask "what do you want me to translate?" or request clarification about the request language.
-- Do **not** use `kubectl exec`, `logs -f`, attach, or any interactive/mutating command.
-- Do **not** report "normal" for an empty result; use `no_data`.
-- Do **not** run the Prometheus path if the Prometheus tools are absent.
-- Do **not** invent metrics, PromQL, or `arms_*` definitions when the metric tools are unavailable.
-- Do **not** run every check exhaustively if a `critical` anomaly is already confirmed — report promptly.
-- Do **not** advise the user to check the console themselves; provide your own findings.
+- **不要**问"您要我翻译什么？"或请求澄清请求语言。
+- **不要**使用 `kubectl exec`、`logs -f`、attach 或任何交互式/变更类命令。
+- **不要**对空结果报告 "normal"，使用 `no_data`。
+- **不要**在 Prometheus 工具缺失时执行 Prometheus 路径。
+- **不要**在指标工具不可用时臆造指标、PromQL 或 `arms_*` 定义。
+- **不要**在已确认 `critical` 异常时仍穷尽式跑完所有检查——及时报告。
+- **不要**建议用户自己去控制台查看；提供你自己的发现。
 
-## Appendix A — Prometheus/ARMS extension (only if tools are present)
+## 附录 A — Prometheus/ARMS 扩展（仅当工具存在时）
 
-If the following tools are **actually present** in your toolset:
+若以下工具**确实**存在于工具集中：
 
 - `prometheus_service_discovery(service_prefix=...)`
 - `prometheus_service_health(service=...)`
 - `prometheus_metric_query(query=...)`
 
-Then after the Kubernetes workflow, additionally run:
+则在 Kubernetes 流程之后，额外执行：
 
-1. `prometheus_service_discovery(service_prefix="nfc-.*")` to confirm service list.
-2. `prometheus_service_health(service="nfc-.*")` to fetch five dimension snapshots (request, database, SQL, JVM, system) in one call.
-3. Only if an anomaly appears in the snapshot, run `prometheus_metric_query` with a PromQL string to zoom in. Default time window: last 10 minutes.
+1. `prometheus_service_discovery(service_prefix="nfc-.*")` 确认服务列表。
+2. `prometheus_service_health(service="nfc-.*")` 一次调用获取五个维度快照（request、database、SQL、JVM、system）。
+3. 仅当快照中出现异常时，用 `prometheus_metric_query` 传入 PromQL 深入定位。默认时间窗口：最近 10 分钟。
 
-Allowed metric names (do not invent others):
+允许的指标名（不要臆造其他指标）：
 
-- Request: `arms_app_requests_count_ign_destid_endpoint_parent_ppid_prpc_rpc`, `arms_app_requests_error_count_ign_destid_endpoint_parent_ppid_prpc_rpc`, `arms_app_requests_slow_count_ign_destid_endpoint_parent_ppid_prpc_rpc`, `arms_app_requests_seconds_ign_destid_endpoint_parent_ppid_prpc_rpc`, `arms_requests_by_status_count_ign_rpc`
-- Database/SQL: `arms_db_requests_count_ign_rpc`, `arms_db_requests_error_count_ign_rpc`, `arms_db_requests_slow_count_ign_rpc`, `arms_db_requests_seconds_ign_rpc`, `arms_sql_requests_count_ign_rpc`, `arms_sql_requests_error_count_ign_rpc`, `arms_sql_requests_slow_count_ign_rpc`, `arms_sql_requests_seconds_ign_rpc`, `arms_exception_requests_count_ign_destid_endpoint_rpc`, `arms_exception_requests_seconds_ign_destid_endpoint_rpc`
-- JVM: `arms_jvm_gc_total`, `arms_jvm_gc_seconds_total`
-- System: `arms_system_cpu_idle`, `arms_system_cpu_io_wait`, `arms_system_net_out_errs`, `arms_system_net_in_errs`
+- 请求：`arms_app_requests_count_ign_destid_endpoint_parent_ppid_prpc_rpc`、`arms_app_requests_error_count_ign_destid_endpoint_parent_ppid_prpc_rpc`、`arms_app_requests_slow_count_ign_destid_endpoint_parent_ppid_prpc_rpc`、`arms_app_requests_seconds_ign_destid_endpoint_parent_ppid_prpc_rpc`、`arms_requests_by_status_count_ign_rpc`
+- 数据库/SQL：`arms_db_requests_count_ign_rpc`、`arms_db_requests_error_count_ign_rpc`、`arms_db_requests_slow_count_ign_rpc`、`arms_db_requests_seconds_ign_rpc`、`arms_sql_requests_count_ign_rpc`、`arms_sql_requests_error_count_ign_rpc`、`arms_sql_requests_slow_count_ign_rpc`、`arms_sql_requests_seconds_ign_rpc`、`arms_exception_requests_count_ign_destid_endpoint_rpc`、`arms_exception_requests_seconds_ign_destid_endpoint_rpc`
+- JVM：`arms_jvm_gc_total`、`arms_jvm_gc_seconds_total`
+- 系统：`arms_system_cpu_idle`、`arms_system_cpu_io_wait`、`arms_system_net_out_errs`、`arms_system_net_in_errs`
 
-Never use `http_requests_total`, `up`, `node_*`, or any invented `arms_*` metric.
+绝不使用 `http_requests_total`、`up`、`node_*` 或任何臆造的 `arms_*` 指标。
 
-Severity mapping for metric anomalies:
+指标异常的严重程度映射：
 
-| Check | Threshold | Severity |
+| 检查 | 阈值 | 严重程度 |
 |---|---|---|
-| error request ratio | ≥ 0.10 | critical |
-| HTTP 200 ratio | ≤ 0.90 | critical |
-| DB latency | ≥ 5s | critical |
-| DB/SQL error ratio | ≥ 0.05 | warning |
-| slow SQL count > 0 | > 0 | warning |
-| old GC freq | ≥ 0.05/min | warning |
-| old GC duration | ≥ 3s | warning |
-| IO wait | ≥ 1% | warning |
-| network errors | > 0 | warning |
-| young GC freq | ≥ 5/min | info |
-| young GC duration | ≥ 8s | info |
-| CPU idle | ≤ 20% | info |
+| 请求错误率 | ≥ 0.10 | critical |
+| HTTP 200 占比 | ≤ 0.90 | critical |
+| DB 延迟 | ≥ 5s | critical |
+| DB/SQL 错误率 | ≥ 0.05 | warning |
+| 慢 SQL 数量 > 0 | > 0 | warning |
+| 老年代 GC 频率 | ≥ 0.05/min | warning |
+| 老年代 GC 时长 | ≥ 3s | warning |
+| IO 等待 | ≥ 1% | warning |
+| 网络错误 | > 0 | warning |
+| 新生代 GC 频率 | ≥ 5/min | info |
+| 新生代 GC 时长 | ≥ 8s | info |
+| CPU 空闲 | ≤ 20% | info |
 
-If Prometheus data returns empty for a service, mark that service’s checks as `no_data`, not `normal`.
+若某服务的 Prometheus 数据返回空，将该服务的检查标记为 `no_data`，而不是 `normal`。
 
-Merge the Kubernetes findings and Prometheus findings into one final JSON report using the output format above. The `skill` field remains `"diagnose_prometheus_anomaly"`.
+将 Kubernetes 结论与 Prometheus 结论合并为一个最终 JSON 报告，使用上面的输出格式。`skill` 字段保持 `"diagnose_prometheus_anomaly"`。
