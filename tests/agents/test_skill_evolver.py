@@ -101,6 +101,34 @@ class SkillEvolverUnitTests(unittest.TestCase):
         self.assertIn("accepted", user_msg["content"])
         self.assertIn("rejected", user_msg["content"])
 
+    def test_save_with_record_keeps_active_unique(self):
+        """save_skill(record_version=True) 插入新 active 时旧 active 必须转 rolled_back."""
+        from hermes.skills.loader import save_skill as save
+
+        new_skill = "---\nname: evolve_me\ndescription: newer\n---\n\n# v2\n"
+        save("evolve_me", new_skill, skills_dir=self.tmpdir)
+        with db.session_scope() as s:
+            actives = s.query(SkillVersion).filter_by(
+                skill_name="evolve_me", status="active").all()
+            self.assertEqual(len(actives), 1)
+            self.assertEqual(actives[0].content, new_skill)
+
+    def test_gather_outcomes_truncates_notes(self):
+        """超长决策备注/摘要必须截断, 防止 prompt 超长导致 LLM 生成失败."""
+        with db.session_scope() as s:
+            s.add(SkillOutcome(
+                skill_name="evolve_me", cluster_context="prod",
+                triggered_by="user", run_at=datetime.utcnow(),
+                findings_json="{}",
+                findings_summary="f" * 500,
+                user_decision="rejected", decision_at=datetime.utcnow(),
+                decision_notes="x" * 500,
+            ))
+        evolver = SkillEvolver(llm_client=self.mock_llm, skills_dir=self.tmpdir)
+        for o in evolver._gather_outcomes("evolve_me"):
+            self.assertLessEqual(len(o["decision_notes"]), 300)
+            self.assertLessEqual(len(o["findings_summary"]), 300)
+
     def test_evolver_saves_new_content(self):
         evolver = SkillEvolver(llm_client=self.mock_llm, skills_dir=self.tmpdir)
         evolver.evolve_skill("evolve_me", save=True)

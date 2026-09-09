@@ -237,15 +237,20 @@ def save_skill(
 
     path.write_text(content, encoding="utf-8")
 
-    # Record version
+    # Record version (active 唯一: 新版本成为线上, 旧 active 自动转 rolled_back)
     if record_version:
-        _record_skill_version(name, content, diff, reason)
+        new_version = _record_skill_version(name, content, diff, reason)
+        if new_version is not None:
+            deactivate_others(name, keep_version=new_version)
 
     return str(path)
 
 
-def _record_skill_version(name: str, content: str, diff: str, reason: str) -> None:
-    """Persist a SkillVersion entry for the just-saved skill."""
+def _record_skill_version(name: str, content: str, diff: str, reason: str) -> Optional[int]:
+    """Persist a SkillVersion entry for the just-saved skill.
+
+    Returns the new version number (None on DB failure).
+    """
     try:
         with session_scope() as s:
             # Determine next version number
@@ -254,14 +259,16 @@ def _record_skill_version(name: str, content: str, diff: str, reason: str) -> No
                 select(func.max(SkillVersion.version))
                 .where(SkillVersion.skill_name == name)
             ).scalar() or 0
+            new_version = int(max_v) + 1
             s.add(SkillVersion(
                 skill_name=name,
-                version=int(max_v) + 1,
+                version=new_version,
                 content=content,
                 diff=diff,
                 reason=reason,
                 created_at=datetime.utcnow(),
             ))
+            return new_version
     except Exception:
         # Don't block saves on DB errors
-        pass
+        return None

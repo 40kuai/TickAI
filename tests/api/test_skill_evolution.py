@@ -204,6 +204,11 @@ class SkillEvolutionApiTests(unittest.TestCase):
         self.assertEqual(data["versions"][0]["id"], v1.id)
         self.assertEqual(data["versions"][0]["status"], "active")
 
+    def test_evolve_unknown_skill_returns_404(self):
+        """进化不存在的技能 → 404(而非 502): 语义是资源缺失, 不是 LLM 失败."""
+        res = self.client.post("/api/skills/no_such_skill_xyz/evolve")
+        self.assertEqual(res.status_code, 404)
+
     @patch("hermes.agents.skill_evolver.evolve_skill", return_value=NEW_CONTENT)
     def test_approve_missing_version_404(self, _mock_evolve):
         res = self.client.post("/api/skills/detect_oom_killed/versions/99999/approve")

@@ -134,8 +134,9 @@ class SkillEvolver(BaseAgent):
                 {
                     "run_at": r.run_at.isoformat() if r.run_at else None,
                     "user_decision": r.user_decision,
-                    "decision_notes": r.decision_notes,
-                    "outcome_effect": r.outcome_effect,
+                    # 截断长文本, 防止 20 条反馈把 prompt 撑爆导致 LLM 生成失败
+                    "decision_notes": (r.decision_notes or "")[:300],
+                    "outcome_effect": (r.outcome_effect or "")[:300],
                     "findings_summary": r.findings_summary[:300],
                 }
                 for r in rows
@@ -176,6 +177,7 @@ class SkillEvolver(BaseAgent):
                 parts.append(
                     f"### Outcome #{i} — {o['user_decision']}\n"
                     f"Findings: {o['findings_summary']}\n"
+                    f"Effect: {o['outcome_effect'] or '(none)'}\n"
                     f"Notes: {o['decision_notes'] or '(none)'}\n"
                 )
         else:

@@ -167,6 +167,13 @@ def evolve_skill(
 
     from hermes.agents.skill_evolver import EvolutionError, evolve_skill as _evolve
 
+    # 技能不存在 → 404(资源缺失), 而不是 502(LLM 失败)
+    if not any(s["name"] == name for s in list_skills()):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"技能 '{name}' 不存在",
+        )
+
     try:
         new_content = _evolve(name, save=False, max_tokens=max_tokens)
     except EvolutionError as exc:
