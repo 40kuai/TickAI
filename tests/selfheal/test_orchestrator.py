@@ -458,6 +458,8 @@ class UnifiedGateTests(_SelfHealTestCase):
         self.assertTrue(result["success"])
 
     def test_cooldown_skips_repeat(self):
+        # 冷却期内探测到异常仍在 → 不自动重复执行(auto 防抖), 降级挂审批单供人工决策,
+        # 避免"服务实际异常但返回 noop"造成状态不一致
         from datetime import datetime, timedelta, timezone
         with db.session_scope() as s:
             s.add(models.SelfHealAction(
@@ -474,8 +476,13 @@ class UnifiedGateTests(_SelfHealTestCase):
             result = orchestrator.run_selfheal(
                 1, "disk_clean",
                 {"mount": "/", "path": "/var/log/nginx/access.log"}, "user")
-        self.assertEqual(result["status"], "noop")
-        self.assertIn("冷却", result["reason"])
+        self.assertEqual(result["status"], "pending")
+        self.assertIn("冷却", result["message"])
+        self.assertIn("action_id", result)
+        with db.session_scope() as s:
+            row = s.query(models.SelfHealAction).filter_by(status="pending").first()
+            self.assertIsNotNone(row)
+            self.assertIn("冷却", row.grade_reasons or "")
 
     def test_cleanup_script_invalid_category_rejected(self):
         # 白名单外 category → build_dry_run_command 抛 ValueError → rejected(与 hard_rule 同语义),

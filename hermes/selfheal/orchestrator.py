@@ -158,8 +158,16 @@ def _run(
 
     # ---- 2. 冷却去重(同操作短时间内已执行过, 防审批疲劳) ----
     if approval.cooldown_active(server_id, scene, action_name):
-        return {"severity": "ok", "status": "noop", "success": True,
-                "reason": f"{action_name} 处于冷却期内, 跳过重复处理"}
+        # 冷却期内探测到异常仍在: 不自动重复处理(防抖), 降级挂审批单供人工决策,
+        # 避免"服务实际异常但返回 noop"造成状态与事实不一致
+        reasons = [f"{action_name} 冷却期内仍探测到异常, 需人工确认处理"]
+        record = _persist(server_id, scene, target, "high", action_name,
+                          "pending", triggered_by, reasons=reasons,
+                          rendered_command=None)
+        return {"severity": "high", "status": "pending", "success": False,
+                "action_id": record.id, "reasons": reasons,
+                "action_name": action_name,
+                "message": "探测到异常但处于冷却期内, 已挂审批单待人工处理"}
 
     # ---- 3. 影响面采集(仅脚本类: dry-run 只读预览, 供审批决策依据) ----
     impact = None
