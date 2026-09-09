@@ -683,7 +683,7 @@ onMounted(loadAll)
                 </div>
                 <div v-if="wizardResult.plan_id" class="residue-row">
                   批次号：<code>{{ wizardResult.plan_id }}</code>
-                  <span class="residue-desc">挂单的项请到下方「审批队列」处理</span>
+                  <span class="residue-desc">挂单的项请到下方「AI 审批」处理</span>
                 </div>
                 <div v-if="wizardRejectedItems.length" class="rejected-panel">
                   <div class="selected-title">被拒项及原因</div>
@@ -786,7 +786,7 @@ onMounted(loadAll)
               <div class="approval-info">
                 <span class="badge" :class="severityBadge(a.severity)">{{ severityLabel(a.severity) }}</span>
                 <span class="approval-scene">{{ sceneLabel(a.scene) }}</span>
-                <code class="cmd-text" :title="a.rendered_command || a.target">{{ a.rendered_command || JSON.stringify(a.target) }}</code>
+                <code class="cmd-text" :title="a.rendered_command || JSON.stringify(a.target)">{{ a.rendered_command || JSON.stringify(a.target) }}</code>
               </div>
               <div v-if="approvalReasons(a)" class="approval-reason">原因：{{ approvalReasons(a) }}</div>
               <div class="action-btns">
@@ -1008,10 +1008,6 @@ onMounted(loadAll)
   gap: 6px;
   flex-wrap: wrap;
 }
-.text-light {
-  color: var(--color-text-secondary);
-  font-size: 13px;
-}
 
 /* 审批详情弹窗 */
 .modal-mask {
@@ -1146,9 +1142,6 @@ onMounted(loadAll)
   grid-template-columns: repeat(2, 1fr);
   gap: var(--spacing-md);
 }
-.form-grid .full {
-  grid-column: 1 / -1;
-}
 .form-actions {
   display: flex;
   justify-content: flex-end;
@@ -1256,9 +1249,6 @@ textarea.form-input {
 .submit-stat.danger { color: var(--color-danger); }
 .rejected-panel { border: 1px solid rgba(239, 68, 68, 0.35); border-radius: var(--radius-sm); padding: 10px; display: flex; flex-direction: column; gap: 6px; }
 .rejected-row { font-size: 12px; word-break: break-all; }
-/* 快捷清理 / 高级模式 折叠面板 */
-.collapse-panel { border: 1px dashed var(--color-border-light); border-radius: var(--radius-sm); padding: 12px; margin-bottom: 12px; }
-.category-desc { margin: 8px 0 0; font-size: 12px; color: var(--color-text-secondary); }
 
 /* 自愈场景卡片 */
 .global-server { margin-bottom: 16px; display: flex; align-items: center; gap: 10px; }
