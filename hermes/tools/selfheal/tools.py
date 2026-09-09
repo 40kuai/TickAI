@@ -102,4 +102,7 @@ registry.register(
     handler=run_selfheal_handler,
     check_fn=lambda: True,
     emoji="🩺",
+    # 唯一受控写入口: 管理页标注写/高危, 对话读全开过滤时永不按只读暴露
+    read_only=False,
+    risk="high",
 )

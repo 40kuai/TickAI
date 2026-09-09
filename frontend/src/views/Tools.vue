@@ -17,12 +17,28 @@ async function loadTools() {
   errorMsg.value = ''
   try {
     const res = await api.get('/tools')
-    tools.value = res.data || []
+    // 治理元数据展开到顶层: schema 字段(description/parameters) + read_only/risk
+    tools.value = (res.data || []).map((t) => ({
+      ...t.schema,
+      name: t.name,
+      toolset: t.toolset,
+      emoji: t.emoji || '',
+      read_only: t.read_only !== false,
+      risk: t.risk || 'low'
+    }))
   } catch (err) {
     errorMsg.value = err.response?.data?.detail || '加载工具列表失败'
   } finally {
     loading.value = false
   }
+}
+
+// 读写/风险徽章文案
+function modeText(tool) {
+  return tool.read_only ? '只读' : '写'
+}
+function riskText(risk) {
+  return { low: '低危', medium: '中危', high: '高危' }[risk] || risk
 }
 
 // 展开/收起
@@ -113,10 +129,17 @@ onMounted(loadTools)
   <div class="tools-page">
     <div class="page-head">
       <div>
-        <h2 class="page-title">工具浏览</h2>
-        <p class="page-sub">查看可用工具及其参数，并可展开测试运行</p>
+        <h2 class="page-title">能力注册中心 · 工具</h2>
+        <p class="page-sub">全部工具清单（对话可见），标注读写类型与风险等级；展开可测试运行</p>
       </div>
       <button class="btn btn-outline" @click="loadTools">刷新</button>
+    </div>
+
+    <div v-if="!loading && !errorMsg && tools.length" class="tool-stats">
+      <span class="stat-item">共 {{ tools.length }} 个</span>
+      <span class="stat-item read">只读 {{ tools.filter((t) => t.read_only).length }}</span>
+      <span class="stat-item write">写 {{ tools.filter((t) => !t.read_only).length }}</span>
+      <span class="stat-item high">高危 {{ tools.filter((t) => t.risk === 'high').length }}</span>
     </div>
 
     <div v-if="loading" class="state-tip card">加载中…</div>
@@ -127,7 +150,18 @@ onMounted(loadTools)
       <div v-for="tool in tools" :key="tool.name" class="tool-card">
         <div class="tool-head" @click="toggle(tool)">
           <div class="tool-head-main">
-            <span class="tool-name">{{ tool.name }}</span>
+            <div class="tool-name-row">
+              <span class="tool-emoji">{{ tool.emoji }}</span>
+              <span class="tool-name">{{ tool.name }}</span>
+              <span
+                class="mode-badge"
+                :class="tool.read_only ? 'mode-read' : 'mode-write'"
+              >{{ modeText(tool) }}</span>
+              <span
+                class="mode-badge"
+                :class="`risk-${tool.risk}`"
+              >{{ riskText(tool.risk) }}</span>
+            </div>
             <p class="tool-desc">{{ tool.description || '暂无描述' }}</p>
           </div>
           <span class="tool-arrow">{{ expanded[tool.name] ? '▾' : '▸' }}</span>
@@ -205,6 +239,68 @@ onMounted(loadTools)
 }
 .state-tip.error {
   color: var(--color-danger);
+}
+
+.tool-stats {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.stat-item {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--color-border-light);
+  color: var(--color-text-secondary);
+}
+.stat-item.read {
+  background: rgba(16, 185, 129, 0.12);
+  color: #059669;
+}
+.stat-item.write {
+  background: rgba(245, 158, 11, 0.14);
+  color: #d97706;
+}
+.stat-item.high {
+  background: rgba(239, 68, 68, 0.12);
+  color: #dc2626;
+}
+
+.tool-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.tool-emoji {
+  font-size: 15px;
+}
+.mode-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 8px;
+  border-radius: 999px;
+  line-height: 18px;
+}
+.mode-read {
+  background: rgba(16, 185, 129, 0.12);
+  color: #059669;
+}
+.mode-write {
+  background: rgba(245, 158, 11, 0.14);
+  color: #d97706;
+}
+.risk-low {
+  background: rgba(16, 185, 129, 0.12);
+  color: #059669;
+}
+.risk-medium {
+  background: rgba(245, 158, 11, 0.14);
+  color: #d97706;
+}
+.risk-high {
+  background: rgba(239, 68, 68, 0.12);
+  color: #dc2626;
 }
 
 .tool-grid {

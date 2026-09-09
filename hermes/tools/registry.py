@@ -60,8 +60,14 @@ class ToolRegistry:
         toolset: str = "default",
         emoji: str = "",
         max_result_size_chars: int = 8000,
+        read_only: bool = True,
+        risk: str = "low",
     ) -> None:
-        """Register a tool. `schema["name"]` must match `name`."""
+        """Register a tool. `schema["name"]` must match `name`.
+
+        read_only/risk: P0 能力治理元数据 — 管理页按此分级展示, 对话侧
+        「读全开」按 read_only 过滤; 默认只读低危(default-deny)。
+        """
         if schema.get("name") and schema["name"] != name:
             raise ValueError(
                 f"schema.name={schema['name']!r} does not match name={name!r}"
@@ -77,6 +83,8 @@ class ToolRegistry:
             "toolset": toolset,
             "emoji": emoji,
             "max_result_size_chars": max_result_size_chars,
+            "read_only": read_only,
+            "risk": risk,
         }
 
     def has(self, name: str) -> bool:
@@ -94,6 +102,24 @@ class ToolRegistry:
         return [
             t["schema"] for t in self._tools.values()
             if t.get("toolset") == toolset
+        ]
+
+    def list_meta(self) -> List[Dict[str, Any]]:
+        """Return per-tool governance metadata (schema + read_only/risk/emoji).
+
+        Used by the management page (工具清单) and the chat-side
+        read_only filtering; never exposed to the LLM as tool schemas.
+        """
+        return [
+            {
+                "name": t["name"],
+                "schema": t["schema"],
+                "toolset": t["toolset"],
+                "emoji": t["emoji"],
+                "read_only": t["read_only"],
+                "risk": t["risk"],
+            }
+            for t in self._tools.values()
         ]
 
     def dispatch(self, name: str, args: Dict[str, Any], **kwargs: Any) -> str:

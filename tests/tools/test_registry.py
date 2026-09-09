@@ -2,7 +2,7 @@
 import json
 import unittest
 
-from hermes.tools.registry import ToolRegistry, tool_error, tool_result
+from hermes.tools.registry import ToolRegistry, registry, tool_error, tool_result
 
 
 class ToolResultTests(unittest.TestCase):
@@ -120,6 +120,47 @@ class RegistryListSchemasTests(unittest.TestCase):
             )
         names = [s["name"] for s in reg.list_schemas()]
         self.assertEqual(names, ["t0", "t1", "t2"])
+
+
+class RegistryMetaTests(unittest.TestCase):
+    """P0 能力治理: 每个工具带 read_only / risk 元数据, 供管理页分级展示."""
+
+    def _reg(self):
+        return ToolRegistry()
+
+    def test_register_defaults_to_read_only_low_risk(self):
+        reg = self._reg()
+        reg.register(name="t", schema={"name": "t"}, handler=lambda a, **k: "ok",
+                     check_fn=lambda: True)
+        meta = reg.list_meta()[0]
+        self.assertTrue(meta["read_only"])
+        self.assertEqual(meta["risk"], "low")
+
+    def test_register_explicit_write_high_risk_stored(self):
+        reg = self._reg()
+        reg.register(name="t", schema={"name": "t"}, handler=lambda a, **k: "ok",
+                     check_fn=lambda: True, read_only=False, risk="high")
+        meta = reg.list_meta()[0]
+        self.assertFalse(meta["read_only"])
+        self.assertEqual(meta["risk"], "high")
+
+    def test_list_meta_returns_governance_fields(self):
+        reg = self._reg()
+        reg.register(name="t", schema={"name": "t"}, handler=lambda a, **k: "ok",
+                     check_fn=lambda: True, toolset="ops", emoji="🔧")
+        meta = reg.list_meta()[0]
+        self.assertEqual(meta["name"], "t")
+        self.assertEqual(meta["toolset"], "ops")
+        self.assertEqual(meta["emoji"], "🔧")
+        self.assertEqual(meta["schema"]["name"], "t")
+
+    def test_run_selfheal_marked_write_high_risk(self):
+        """唯一受控写入口必须显式标注 write/high, 管理页与对话过滤依赖此标记."""
+        from hermes.tools.selfheal import tools  # noqa: F401  (注册副作用)
+        meta = {m["name"]: m for m in registry.list_meta()}
+        self.assertIn("run_selfheal", meta)
+        self.assertFalse(meta["run_selfheal"]["read_only"])
+        self.assertEqual(meta["run_selfheal"]["risk"], "high")
 
 
 if __name__ == "__main__":

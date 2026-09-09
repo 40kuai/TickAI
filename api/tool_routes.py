@@ -29,10 +29,13 @@ class ToolRunRequest(BaseModel):
 
 @router.get("")
 def list_tools(user=Depends(get_current_user)):
-    """List registered tool schemas (chat-visible tools only)."""
+    """List registered tools (chat-visible only) with governance metadata.
+
+    Each entry carries read_only / risk 供管理页分级展示(能力注册中心).
+    """
     return [
-        s for s in registry.list_schemas()
-        if is_chat_visible(s.get("name", ""))
+        m for m in registry.list_meta()
+        if is_chat_visible(m["name"])
     ]
 
 
