@@ -277,5 +277,7 @@ def run_skill(
             model=LLM_MODEL(),
             base_url=LLM_BASE_URL(),
         )
-        _default_runner = SkillRunner(llm_client=client)
+        # 平台默认中文输出(对话/API/飞书触发技能统一走此入口);
+        # 需要英文时调用方显式传 language
+        _default_runner = SkillRunner(llm_client=client, language="zh")
     return _default_runner.execute_skill(skill_name, cluster_context, triggered_by)
