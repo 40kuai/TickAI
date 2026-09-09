@@ -362,14 +362,14 @@ const wizardStrategy = computed(() => ({
 }))
 
 // 向导可提交条件: 已选服务器 且 至少勾选一项
-const canSubmitWizard = computed(() => Boolean(serverId) && selected.value.size > 0)
+const canSubmitWizard = computed(() => Boolean(serverId.value) && selected.value.size > 0)
 
 // 提交向导(ai-plan), 结果结构化展示
 async function handleSubmitWizard() {
   if (wizardRunning.value) return
   wizardError.value = ''
   wizardResult.value = null
-  if (!serverId) {
+  if (!serverId.value) {
     wizardError.value = '请选择服务器'
     return
   }
@@ -384,7 +384,7 @@ async function handleSubmitWizard() {
   wizardRunning.value = true
   try {
     const res = await api.post('/selfheal/ai-plan', {
-      server_id: Number(serverId),
+      server_id: Number(serverId.value),
       strategy: wizardStrategy.value,
     })
     wizardResult.value = res.data
@@ -496,10 +496,10 @@ async function handleScan() {
   if (scanRunning.value) return
   scanError.value = ''
   scanResult.value = null
-  if (!serverId) { scanError.value = '请选择服务器'; return }
+  if (!serverId.value) { scanError.value = '请选择服务器'; return }
   scanRunning.value = true
   try {
-    const res = await api.post('/selfheal/scan-log', { server_id: Number(serverId) })
+    const res = await api.post('/selfheal/scan-log', { server_id: Number(serverId.value) })
     scanResult.value = res.data
   } catch (err) {
     scanError.value = err.response?.data?.detail || '扫描失败'
