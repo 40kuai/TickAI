@@ -41,7 +41,7 @@ def _is_docker_log_path(value: str) -> bool:
 ACTIONS: Dict[str, Dict[str, Any]] = {
     "restart_service": {
         "scene": "process_restart",
-        "template": "systemctl restart {service} || docker restart {service}",
+        "template": "systemctl restart {service}",
         "validate": lambda p: _in_whitelist(p.get("service", ""), config.SERVICE_WHITELIST),
         "why": "服务名必须在 SELFHEAL_SERVICE_WHITELIST 内",
     },

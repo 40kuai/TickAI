@@ -61,10 +61,7 @@ class ParseMeminfoTests(unittest.TestCase):
 class ProbeCommandTests(unittest.TestCase):
     def test_process_probe(self):
         cmd = detect.probe_command("process_restart", {"service": "nginx"})
-        # systemd 单元优先, 无该单元时 docker inspect 兜底(容器化服务), 都无 → unknown
-        self.assertIn("systemctl is-active nginx", cmd)
-        self.assertIn("docker inspect", cmd)
-        self.assertIn("unknown", cmd)
+        self.assertEqual(cmd, "systemctl is-active nginx")
 
     def test_disk_probe(self):
         cmd = detect.probe_command("disk_clean", {"mount": "/"})

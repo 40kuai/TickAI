@@ -13,12 +13,7 @@ def probe_command(scene: str, target: Dict[str, Any]) -> str:
     """按场景返回硬编码只读探测命令。target 仅参数化模板。"""
     if scene == "process_restart":
         service = target["service"]
-        # systemd 单元优先; 无该单元时 docker inspect 兜底(容器化服务, 如 1Panel 管理的
-        # 容器), 输出归一为 active/inactive/unknown, 与 parse_systemctl_active 兼容。
-        return (f"systemctl is-active {service} 2>/dev/null || "
-                f"docker inspect -f "
-                f"'{{{{if .State.Running}}}}active{{{{else}}}}inactive{{{{end}}}}' "
-                f"{service} 2>/dev/null || echo unknown")
+        return f"systemctl is-active {service}"
     if scene == "disk_clean":
         mount = target["mount"]
         return f"df -Th {mount}"

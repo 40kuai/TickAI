@@ -16,9 +16,7 @@ class RenderCommandTests(unittest.TestCase):
 
     def test_restart_allowed_service(self):
         cmd = actions.render_command("restart_service", {"service": "nginx"})
-        # systemd 单元优先, 无该单元时 docker restart 兜底(容器化服务)
-        self.assertIn("systemctl restart nginx", cmd)
-        self.assertIn("docker restart nginx", cmd)
+        self.assertEqual(cmd, "systemctl restart nginx")
 
     def test_restart_rejects_non_whitelisted(self):
         with self.assertRaises(ValueError):
