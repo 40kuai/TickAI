@@ -155,7 +155,8 @@ async function proposeEvolve() {
   evolveBusy.value = true
   evolveMsg.value = ''
   try {
-    const res = await api.post(`/skills/${encodeURIComponent(detail.value.name)}/evolve`)
+    // 显式限制 LLM 输出长度, 长技能生成防超时
+    const res = await api.post(`/skills/${encodeURIComponent(detail.value.name)}/evolve?max_tokens=8192`)
     evolveMsg.value = `候选版本 v${res.data.version} 已生成，待审批（${(res.data.diff || '').split('\n').length} 行差异）`
     await reloadVersions()
   } catch (err) {

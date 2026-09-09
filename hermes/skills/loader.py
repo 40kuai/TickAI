@@ -182,8 +182,12 @@ def save_skill(
     content: str,
     skills_dir: str | Path = SKILLS_DIR,
     reason: str = "manual",
+    record_version: bool = True,
 ) -> str:
-    """Save a skill to disk and create a SkillVersion entry.
+    """Save a skill to disk and (optionally) create a SkillVersion entry.
+
+    record_version=False 用于「候选批准写盘」: 内容落盘但不再新增版本记录,
+    候选记录本身流转为 active(线上), 避免同一次进化产生双记录/版本跳号。
 
     Returns the file path written. The filename is derived from the
     frontmatter `name` field (or the provided `name` as fallback).
@@ -210,7 +214,8 @@ def save_skill(
     path.write_text(content, encoding="utf-8")
 
     # Record version
-    _record_skill_version(name, content, diff, reason)
+    if record_version:
+        _record_skill_version(name, content, diff, reason)
 
     return str(path)
 

@@ -100,13 +100,15 @@ class SkillEvolutionApiTests(unittest.TestCase):
         res = self.client.post(f"/api/skills/detect_oom_killed/versions/{vid}/approve")
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()["status"], "approved")
-        # 写盘被调用, 且内容为候选版本
+        # 写盘被调用, 且不重复记录新版本(候选即线上版本, 不产生双记录)
         self.assertEqual(mock_save.call_count, 1)
+        self.assertIs(mock_save.call_args.kwargs.get("record_version"), False)
         saved_content = mock_save.call_args[0][1]
         self.assertIn("improved", saved_content)
-        # 原候选标记已处置
         with db.session_scope() as s:
-            self.assertEqual(s.query(models.SkillVersion).get(vid).status, "approved")
+            row = s.query(models.SkillVersion).get(vid)
+            self.assertEqual(row.status, "active")  # 候选已成为线上版本
+            self.assertEqual(s.query(models.SkillVersion).count(), 2)  # 初始 v1 + 候选, 无重复
 
     @patch("hermes.agents.skill_evolver.evolve_skill", return_value=NEW_CONTENT)
     @patch("hermes.skills.loader.save_skill")

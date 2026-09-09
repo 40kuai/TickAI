@@ -249,10 +249,11 @@ def approve_skill_version(name: str, vid: int, user=Depends(get_current_user)):
             detail=f"候选版本 {vid} 内容校验未通过, 拒绝批准 - {invalid}",
         )
     # 写盘生效: 独立事务, 避免嵌套 session(SQLite 单连接锁)
-    save_skill(name, content, reason="auto_evolve")
+    # record_version=False: 候选记录本身流转为 active(线上), 不产生双记录/版本跳号
+    save_skill(name, content, reason="auto_evolve", record_version=False)
     with db.session_scope() as s:
         row = s.query(models.SkillVersion).filter_by(id=vid, skill_name=name).first()
-        row.status = "approved"  # 候选已批准生效; 回滚才用 rolled_back
+        row.status = "active"  # 候选已批准并成为线上版本; 回滚才用 rolled_back
     return {"status": "approved", "version_id": vid}
 
 
