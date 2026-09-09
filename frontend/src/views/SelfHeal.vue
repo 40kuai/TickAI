@@ -10,10 +10,6 @@ const stats = ref({ total_executed: 0, success: 0, success_rate: 0, pending: 0 }
 const loading = ref(false)
 const errorMsg = ref('')
 
-const running = ref(false)
-const runError = ref('')
-const runResult = ref(null)
-
 // ====== 审批状态 ======
 const approvingId = ref(null)
 const actionError = ref('')
@@ -114,7 +110,14 @@ const serviceName = ref('')  // 服务进程异常: 服务名
 const cacheMode = ref('')    // 缓存占用过高: drop_caches 模式(如 3)
 const sceneRunning = ref('') // 当前运行中的场景 key('process'/'cache'), 空=无
 const sceneError = ref('')
+const sceneErrorKey = ref('')   // 错误归属场景
 const sceneResult = ref(null)
+const sceneResultKey = ref('')  // 结果归属场景
+
+// 概览待审批 → 滚到 AI 审批区
+function scrollToApproval() {
+  document.getElementById('approval-section')?.scrollIntoView({ behavior: 'smooth' })
+}
 
 // 运行结果摘要(按 status 给一句话结论)
 function sceneSummary(res) {
@@ -135,11 +138,6 @@ const statCards = computed(() => [
   { label: '成功率', value: (stats.value.success_rate ?? 0) + '%', icon: '%', tone: 'info' },
   { label: '待审批', value: stats.value.pending ?? 0, icon: '⚠', tone: 'warning' },
 ])
-
-// 场景下拉展示文本
-function sceneOptionText(sc) {
-  return `${sceneLabel(sc.name)}（${sc.name}）`
-}
 
 // ====== 加载数据 ======
 async function loadAll() {
@@ -450,7 +448,9 @@ const activeFileRows = computed(() => rowsForTab(fileTab.value))
 async function runScene(sceneKey) {
   if (sceneRunning.value) return
   sceneError.value = ''
+  sceneErrorKey.value = sceneKey
   sceneResult.value = null
+  sceneResultKey.value = ''
   if (!serverId.value) { sceneError.value = '请选择服务器'; return }
   let scene, target
   if (sceneKey === 'process') {
@@ -470,9 +470,11 @@ async function runScene(sceneKey) {
       server_id: Number(serverId.value), scene, target,
     })
     sceneResult.value = res.data
+    sceneResultKey.value = sceneKey
     await refreshActionsAndStats()
   } catch (err) {
     sceneError.value = err.response?.data?.detail || '触发自愈失败'
+    sceneResultKey.value = ''
   } finally {
     sceneRunning.value = false
   }
@@ -527,83 +529,52 @@ onMounted(loadAll)
         v-for="card in statCards"
         :key="card.label"
         class="stat-card"
-        :class="'tone-' + card.tone"
+        :class="['tone-' + card.tone, { 'stat-link': card.label === '待审批' }]"
+        @click="card.label === '待审批' && scrollToApproval()"
       >
         <div class="stat-icon">{{ card.icon }}</div>
         <div class="stat-body">
-          <div class="stat-value">{{ card.value }}</div>
+          <div class="stat-value">{{ card.value }}<span v-if="card.label === '待审批' && card.value > 0" class="stat-dot"></span></div>
           <div class="stat-label">{{ card.label }}</div>
         </div>
       </div>
     </div>
 
-    <!-- 手动触发自愈 -->
-    <div class="card">
-      <h3 class="card-title">手动触发自愈</h3>
-      <div class="form-grid">
-        <div class="form-group">
-          <label class="form-label">服务器 *</label>
-          <select v-model="form.server_id" class="form-select">
-            <option value="">请选择服务器</option>
-            <option v-for="s in servers" :key="s.id" :value="s.id">
-              {{ s.name }}（{{ s.host }}）
-            </option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label class="form-label">场景 *</label>
-          <select v-model="form.scene" class="form-select">
-            <option value="">请选择场景</option>
-            <option v-for="sc in scenes" :key="sc.name" :value="sc.name">
-              {{ sceneOptionText(sc) }}
-            </option>
-          </select>
-        </div>
-        <div class="form-group full">
-          <label class="form-label">目标参数（JSON）</label>
-          <input v-model="form.target" class="form-input" :placeholder="targetPlaceholder" />
-        </div>
-      </div>
-      <div v-if="runError" class="error-tip">{{ runError }}</div>
-      <div v-if="actionError" class="error-tip">{{ actionError }}</div>
-      <div class="form-actions">
-        <button class="btn btn-primary" :disabled="running" @click="handleRun">
-          {{ running ? '运行中…' : '▶ 运行自愈' }}
-        </button>
-      </div>
-
-      <!-- 运行结果 -->
-      <div v-if="runResult" class="result-box">
-        <div class="result-head">
-          <span class="result-title">运行结果</span>
-          <button class="result-close" @click="runResult = null">×</button>
-        </div>
-        <pre class="result-pre">{{ JSON.stringify(runResult, null, 2) }}</pre>
-      </div>
+    <!-- 全局服务器选择器(三个场景共用) -->
+    <div class="global-server">
+      <label class="form-label">服务器</label>
+      <select v-model="serverId" class="form-select">
+        <option value="">请选择服务器（三个场景共用）</option>
+        <option v-for="s in servers" :key="s.id" :value="s.id">
+          {{ s.name }}（{{ s.host }}）
+        </option>
+      </select>
     </div>
 
-    <!-- 日志清理(通道一固定脚本 + 通道二AI分析) -->
-    <div class="card">
-      <h3 class="card-title">日志清理</h3>
-      <div class="form-grid">
-        <div class="form-group">
-          <label class="form-label">服务器 *</label>
-          <select v-model="cleanupForm.server_id" class="form-select">
-            <option value="">请选择服务器</option>
-            <option v-for="s in servers" :key="s.id" :value="s.id">
-              {{ s.name }}（{{ s.host }}）
-            </option>
-          </select>
+    <!-- 自愈场景 -->
+    <div class="scene-grid">
+      <!-- 磁盘空间不足 -->
+      <div class="scene-card">
+        <div class="scene-head">
+          <span class="scene-icon">🗄</span>
+          <div class="scene-title-block">
+            <div class="scene-title">磁盘空间不足
+              <span v-if="pendingByGroup.disk" class="scene-badge">{{ pendingByGroup.disk }}</span>
+            </div>
+            <div class="scene-desc">扫描大文件/日志/journal/docker 残留，勾选后按风险审批清理</div>
+          </div>
         </div>
-      </div>
-      <div class="form-actions">
-        <button class="btn btn-outline" :disabled="scanRunning" @click="handleScan">
-          {{ scanRunning ? '扫描中…' : '🔍 只读扫描' }}
-        </button>
-      </div>
-
+        <div class="scene-body">
+          <div class="form-actions">
+            <button class="btn btn-outline" :disabled="scanRunning" @click="handleScan">
+              {{ scanRunning ? '扫描中…' : '🔍 扫描磁盘水位' }}
+            </button>
+          </div>
+          <div v-if="!scanResult && !scanError" class="scene-hint">
+            选择服务器后点击扫描，查看磁盘水位并勾选要清理的项
+          </div>
+          <div v-if="scanError" class="error-tip">{{ scanError }}</div>
       <!-- 扫描结果(结构化) -->
-      <div v-if="scanError" class="error-tip">{{ scanError }}</div>
       <div v-if="scanResult" class="wizard-result">
         <div class="result-head">
           <span class="result-title">扫描结果（只读）</span>
@@ -724,16 +695,6 @@ onMounted(loadAll)
         </div>
       </div>
 
-      <!-- 快捷清理 / 高级模式 折叠开关 -->
-      <div class="collapse-row">
-        <button class="btn btn-outline btn-sm" @click="showQuickCleanup = !showQuickCleanup">
-          {{ showQuickCleanup ? '▾ 收起' : '⚡ 快捷清理（整批，按风险审批）' }}
-        </button>
-        <button class="btn btn-outline btn-sm" @click="showAdvanced = !showAdvanced">
-          {{ showAdvanced ? '▾ 收起' : '🔧 高级模式（手写策略 JSON）' }}
-        </button>
-      </div>
-
       <!-- 快捷清理(原固定脚本) -->
       <div v-if="showQuickCleanup" class="collapse-panel">
         <div class="form-grid">
@@ -784,6 +745,78 @@ onMounted(loadAll)
             <button class="result-close" @click="aiPlanResult = null">×</button>
           </div>
           <pre class="result-pre">{{ JSON.stringify(aiPlanResult, null, 2) }}</pre>
+        </div>
+      </div>
+        </div>
+      </div>
+
+      <!-- 服务进程异常 -->
+      <div class="scene-card">
+        <div class="scene-head">
+          <span class="scene-icon">♻️</span>
+          <div class="scene-title-block">
+            <div class="scene-title">服务进程异常
+              <span v-if="pendingByGroup.process" class="scene-badge">{{ pendingByGroup.process }}</span>
+            </div>
+            <div class="scene-desc">重启指定服务，自动 探测 → 审批 → 执行 → 验证</div>
+          </div>
+        </div>
+        <div class="scene-body">
+          <div class="form-grid">
+            <div class="form-group">
+              <label class="form-label">服务名 *</label>
+              <input v-model="serviceName" class="form-input" placeholder="如 nginx / mysqld" />
+            </div>
+          </div>
+          <div v-if="sceneError && sceneErrorKey==='process'" class="error-tip">{{ sceneError }}</div>
+          <div class="form-actions">
+            <button class="btn btn-primary" :disabled="!!sceneRunning" @click="runScene('process')">
+              {{ sceneRunning === 'process' ? '运行中…' : '▶ 运行自愈' }}
+            </button>
+          </div>
+          <div v-if="sceneResult && sceneResultKey==='process'" class="scene-result">
+            <div class="scene-summary" :class="'tone-' + sceneSummary(sceneResult).tone">
+              {{ sceneSummary(sceneResult).text }}
+            </div>
+            <details class="scene-json"><summary>原始结果</summary>
+              <pre class="result-pre">{{ JSON.stringify(sceneResult, null, 2) }}</pre>
+            </details>
+          </div>
+        </div>
+      </div>
+
+      <!-- 缓存占用过高 -->
+      <div class="scene-card">
+        <div class="scene-head">
+          <span class="scene-icon">🧹</span>
+          <div class="scene-title-block">
+            <div class="scene-title">缓存占用过高
+              <span v-if="pendingByGroup.cache" class="scene-badge">{{ pendingByGroup.cache }}</span>
+            </div>
+            <div class="scene-desc">清理系统缓存（pagecache/dentry/inode）</div>
+          </div>
+        </div>
+        <div class="scene-body">
+          <div class="form-grid">
+            <div class="form-group">
+              <label class="form-label">模式 *</label>
+              <input v-model="cacheMode" class="form-input" placeholder="如 3（页缓存+目录项+inode）" />
+            </div>
+          </div>
+          <div v-if="sceneError && sceneErrorKey==='cache'" class="error-tip">{{ sceneError }}</div>
+          <div class="form-actions">
+            <button class="btn btn-primary" :disabled="!!sceneRunning" @click="runScene('cache')">
+              {{ sceneRunning === 'cache' ? '运行中…' : '▶ 运行自愈' }}
+            </button>
+          </div>
+          <div v-if="sceneResult && sceneResultKey==='cache'" class="scene-result">
+            <div class="scene-summary" :class="'tone-' + sceneSummary(sceneResult).tone">
+              {{ sceneSummary(sceneResult).text }}
+            </div>
+            <details class="scene-json"><summary>原始结果</summary>
+              <pre class="result-pre">{{ JSON.stringify(sceneResult, null, 2) }}</pre>
+            </details>
+          </div>
         </div>
       </div>
     </div>
