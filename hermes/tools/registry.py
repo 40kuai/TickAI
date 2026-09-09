@@ -122,6 +122,21 @@ class ToolRegistry:
             for t in self._tools.values()
         ]
 
+    def list_chat_tools(self) -> List[Dict[str, Any]]:
+        """对话「读全开」工具集: 白名单(凭据隔离边界)内只读工具 + 唯一受控写入口.
+
+        P3 语义: 读全开 = 新增只读工具只要进白名单即自动对对话可见(无需手工
+        维护 payload); 写工具永不按只读暴露(read_only=False 即使误入白名单
+        也被过滤), run_selfheal 是唯一例外(走统一审批出口, 高危挂单/低危直执)。
+        """
+        out: List[Dict[str, Any]] = []
+        for t in self.list_meta():
+            if t["name"] == "run_selfheal":
+                out.append(t)
+            elif is_chat_visible(t["name"]) and t["read_only"]:
+                out.append(t)
+        return out
+
     def dispatch(self, name: str, args: Dict[str, Any], **kwargs: Any) -> str:
         """Execute a registered handler by name. Never raises — returns JSON."""
         entry = self._tools.get(name)

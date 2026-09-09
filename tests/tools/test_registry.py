@@ -163,5 +163,32 @@ class RegistryMetaTests(unittest.TestCase):
         self.assertEqual(meta["run_selfheal"]["risk"], "high")
 
 
+class RegistryChatToolsTests(unittest.TestCase):
+    """P3 对话「读全开」: 白名单(凭据边界)内只读工具自动全开 + 唯一写入口 selfheal."""
+
+    def test_chat_tools_include_readonly_whitelist_and_selfheal(self):
+        from hermes.tools.selfheal import tools  # noqa: F401  (注册副作用)
+        names = {t["name"] for t in registry.list_chat_tools()}
+        self.assertIn("run_selfheal", names)       # 唯一受控写入口
+        self.assertIn("check_k8s_pods", names)     # 白名单只读观测
+        self.assertIn("scan_log_cleanup", names)
+        self.assertIn("list_servers", names)
+        # bare SSH(任意 host/password) 不在白名单 → 不得进入对话集
+        self.assertNotIn("check_resources", names)
+        self.assertNotIn("list_services", names)
+
+    def test_write_tool_never_exposed_even_if_whitelisted(self):
+        """写工具即使误入白名单(read_only=False)也不得按只读暴露."""
+        from unittest.mock import patch
+
+        reg = ToolRegistry()
+        reg.register(name="write_tool", schema={"name": "write_tool"},
+                     handler=lambda a, **k: "ok", check_fn=lambda: True,
+                     read_only=False, risk="high")
+        with patch("hermes.tools.registry.is_chat_visible", return_value=True):
+            names = [t["name"] for t in reg.list_chat_tools()]
+        self.assertNotIn("write_tool", names)
+
+
 if __name__ == "__main__":
     unittest.main()

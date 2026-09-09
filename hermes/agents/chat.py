@@ -19,16 +19,15 @@ from hermes.data.models import Conversation
 def _build_tools_payload() -> list[dict]:
     """Build the OpenAI-style 'tools' field from the registry.
 
-    Only chat-visible (whitelisted) tools are exposed to the LLM. Bare SSH
-    tools that accept arbitrary host/password (check_resources / list_services)
-    are intentionally excluded — the LLM reaches servers only via server_id.
+    P3「读全开」: 白名单(凭据隔离边界)内全部只读工具自动可见 + 唯一受控
+    写入口 run_selfheal(走统一审批出口)。bare SSH(任意 host/password) 与
+    任何 read_only=False 的写工具被 read_only 标记过滤, 永不暴露给 LLM。
     """
-    from hermes.tools.registry import is_chat_visible
+    from hermes.tools.registry import registry
 
     return [
-        {"type": "function", "function": schema}
-        for schema in registry.list_schemas()
-        if is_chat_visible(schema.get("name", ""))
+        {"type": "function", "function": t["schema"]}
+        for t in registry.list_chat_tools()
     ]
 
 

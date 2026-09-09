@@ -29,14 +29,12 @@ class ToolRunRequest(BaseModel):
 
 @router.get("")
 def list_tools(user=Depends(get_current_user)):
-    """List registered tools (chat-visible only) with governance metadata.
+    """List tools exposed to the conversational LLM, with governance metadata.
 
-    Each entry carries read_only / risk 供管理页分级展示(能力注册中心).
+    P3「读全开」: 白名单内只读工具自动全开 + run_selfheal(唯一写入口),
+    与对话侧 payload 完全一致(registry.list_chat_tools)。
     """
-    return [
-        m for m in registry.list_meta()
-        if is_chat_visible(m["name"])
-    ]
+    return registry.list_chat_tools()
 
 
 @router.post("/{name}/run")
