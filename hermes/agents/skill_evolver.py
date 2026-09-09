@@ -126,7 +126,11 @@ class SkillEvolver(BaseAgent):
         with db.session_scope() as s:
             rows = s.execute(
                 select(SkillOutcome)
-                .where(SkillOutcome.skill_name == skill_name)
+                .where(
+                    SkillOutcome.skill_name == skill_name,
+                    # 只取用户明确标注的反馈作为进化信号, 未标注的执行记录不参与
+                    SkillOutcome.user_decision.in_(["accepted", "rejected"]),
+                )
                 .order_by(SkillOutcome.run_at.desc())
                 .limit(self.max_outcomes)
             ).scalars().all()

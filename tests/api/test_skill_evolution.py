@@ -210,6 +210,14 @@ class SkillEvolutionApiTests(unittest.TestCase):
         self.assertEqual(res.status_code, 404)
 
     @patch("hermes.agents.skill_evolver.evolve_skill", return_value=NEW_CONTENT)
+    def test_evolve_blocks_while_pending_exists(self, _mock_evolve):
+        """已有待审批候选时再次提议进化 → 409, 防止候选堆积."""
+        self.client.post("/api/skills/detect_oom_killed/evolve")  # 第一个 pending
+        res = self.client.post("/api/skills/detect_oom_killed/evolve")  # 第二个
+        self.assertEqual(res.status_code, 409)
+        self.assertIn("待审批", res.json()["detail"])
+
+    @patch("hermes.agents.skill_evolver.evolve_skill", return_value=NEW_CONTENT)
     def test_approve_missing_version_404(self, _mock_evolve):
         res = self.client.post("/api/skills/detect_oom_killed/versions/99999/approve")
         self.assertEqual(res.status_code, 404)

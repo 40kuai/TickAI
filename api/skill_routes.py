@@ -174,6 +174,19 @@ def evolve_skill(
             detail=f"技能 '{name}' 不存在",
         )
 
+    # 未决候选检查: 已有 pending 时拒绝新进化, 防止候选堆积/版本列表膨胀
+    with db.session_scope() as s:
+        pending = (
+            s.query(models.SkillVersion)
+            .filter_by(skill_name=name, status="pending")
+            .first()
+        )
+        if pending is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"技能 '{name}' 已有待审批候选 v{pending.version}, 请先批准或拒绝",
+            )
+
     try:
         new_content = _evolve(name, save=False, max_tokens=max_tokens)
     except EvolutionError as exc:

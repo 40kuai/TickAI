@@ -113,6 +113,25 @@ class SkillEvolverUnitTests(unittest.TestCase):
             self.assertEqual(len(actives), 1)
             self.assertEqual(actives[0].content, new_skill)
 
+    def test_gather_outcomes_filters_unrated(self):
+        """未标注(accepted/rejected)的反馈不应作为进化信号, 避免 'None' 污染 prompt."""
+        with db.session_scope() as s:
+            s.add(SkillOutcome(
+                skill_name="evolve_me", cluster_context="prod",
+                triggered_by="user", run_at=datetime.utcnow(),
+                findings_json="{}", findings_summary="rated",
+                user_decision="accepted", decision_at=datetime.utcnow()))
+            s.add(SkillOutcome(
+                skill_name="evolve_me", cluster_context="prod",
+                triggered_by="user", run_at=datetime.utcnow(),
+                findings_json="{}", findings_summary="unrated",
+                user_decision=None))
+        evolver = SkillEvolver(llm_client=self.mock_llm, skills_dir=self.tmpdir)
+        outcomes = evolver._gather_outcomes("evolve_me")
+        self.assertTrue(outcomes)
+        self.assertTrue(
+            all(o["user_decision"] in ("accepted", "rejected") for o in outcomes))
+
     def test_gather_outcomes_truncates_notes(self):
         """超长决策备注/摘要必须截断, 防止 prompt 超长导致 LLM 生成失败."""
         with db.session_scope() as s:
