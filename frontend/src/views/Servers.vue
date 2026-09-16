@@ -1,6 +1,7 @@
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
 import api from '@/api'
+import ConfirmDialog from '@/components/ConfirmDialog.vue'
 
 const servers = ref([])
 const loading = ref(false)
@@ -161,18 +162,25 @@ async function saveEditCred() {
   }
 }
 
-// 删除 SSH 凭据（关联服务器将自动解绑）
-async function deleteCredential(cred) {
-  const tip = cred.server_count > 0
+// 删除 SSH 凭据（关联服务器将自动解绑）—— 自定义确认弹窗替代原生 confirm
+const delConfirm = ref(null) // { type: 'cred'|'server', item, message }
+function askDeleteCredential(cred) {
+  const message = cred.server_count > 0
     ? `确定删除凭据「${cred.name}」吗？该凭据关联了 ${cred.server_count} 台服务器，删除后将自动解绑。`
     : `确定删除凭据「${cred.name}」吗？`
-  if (!confirm(tip)) return
+  delConfirm.value = { type: 'cred', item: cred, message }
+}
+async function doDeleteCredential() {
+  if (!delConfirm.value || delConfirm.value.type !== 'cred') return
+  const cred = delConfirm.value.item
   try {
     await api.delete(`/ssh-credentials/${cred.id}`)
+    delConfirm.value = null
     await loadCredentials()
     await loadServers() // 刷新服务器列表以反映解绑状态
   } catch (err) {
     alert(err.response?.data?.detail || '删除失败')
+    delConfirm.value = null
   }
 }
 
@@ -228,13 +236,23 @@ async function handleAdd() {
 }
 
 // 删除服务器
-async function handleDelete(server) {
-  if (!confirm(`确定删除服务器「${server.name}」吗？`)) return
+function askDeleteServer(server) {
+  delConfirm.value = {
+    type: 'server',
+    item: server,
+    message: `确定删除服务器「${server.name}」吗？`,
+  }
+}
+async function doDeleteServer() {
+  if (!delConfirm.value || delConfirm.value.type !== 'server') return
+  const server = delConfirm.value.item
   try {
     await api.delete(`/servers/${server.id}`)
+    delConfirm.value = null
     await loadServers()
   } catch (err) {
     alert(err.response?.data?.detail || '删除失败')
+    delConfirm.value = null
   }
 }
 
@@ -560,7 +578,7 @@ onMounted(() => {
                   <div class="action-btns">
                     <button v-if="!c.is_default" class="btn btn-outline btn-sm" @click="setDefaultCredential(c.id)">设为默认</button>
                     <button class="btn btn-outline btn-sm" @click="openEditCred(c)">编辑</button>
-                    <button class="btn btn-danger btn-sm" @click="deleteCredential(c)">删除</button>
+                    <button class="btn btn-danger btn-sm" @click="askDeleteCredential(c)">删除</button>
                   </div>
                 </td>
               </tr>
@@ -616,7 +634,7 @@ onMounted(() => {
                   <button class="btn btn-outline btn-sm" @click="checkDisk(s)">磁盘</button>
                   <button class="btn btn-outline btn-sm" @click="checkResources(s)">资源</button>
                   <button class="btn btn-outline btn-sm" @click="listServices(s)">服务</button>
-                  <button class="btn btn-danger btn-sm" @click="handleDelete(s)">删除</button>
+                  <button class="btn btn-danger btn-sm" @click="askDeleteServer(s)">删除</button>
                 </div>
               </td>
             </tr>
@@ -822,6 +840,17 @@ onMounted(() => {
         </div>
       </div>
     </div>
+
+    <!-- 删除凭据/服务器确认弹窗 -->
+    <ConfirmDialog
+      :show="delConfirm !== null"
+      :title="delConfirm && delConfirm.type === 'server' ? '删除服务器' : '删除 SSH 凭据'"
+      :message="delConfirm ? delConfirm.message : ''"
+      confirm-text="删除"
+      danger
+      @confirm="delConfirm && delConfirm.type === 'server' ? doDeleteServer() : doDeleteCredential()"
+      @cancel="delConfirm = null"
+    />
   </div>
 </template>
 

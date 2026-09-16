@@ -2,7 +2,7 @@
 import json
 import unittest
 
-from hermes.tools.registry import ToolRegistry, tool_error, tool_result
+from hermes.tools.registry import ToolRegistry, registry, tool_error, tool_result
 
 
 class ToolResultTests(unittest.TestCase):
@@ -120,6 +120,74 @@ class RegistryListSchemasTests(unittest.TestCase):
             )
         names = [s["name"] for s in reg.list_schemas()]
         self.assertEqual(names, ["t0", "t1", "t2"])
+
+
+class RegistryMetaTests(unittest.TestCase):
+    """P0 能力治理: 每个工具带 read_only / risk 元数据, 供管理页分级展示."""
+
+    def _reg(self):
+        return ToolRegistry()
+
+    def test_register_defaults_to_read_only_low_risk(self):
+        reg = self._reg()
+        reg.register(name="t", schema={"name": "t"}, handler=lambda a, **k: "ok",
+                     check_fn=lambda: True)
+        meta = reg.list_meta()[0]
+        self.assertTrue(meta["read_only"])
+        self.assertEqual(meta["risk"], "low")
+
+    def test_register_explicit_write_high_risk_stored(self):
+        reg = self._reg()
+        reg.register(name="t", schema={"name": "t"}, handler=lambda a, **k: "ok",
+                     check_fn=lambda: True, read_only=False, risk="high")
+        meta = reg.list_meta()[0]
+        self.assertFalse(meta["read_only"])
+        self.assertEqual(meta["risk"], "high")
+
+    def test_list_meta_returns_governance_fields(self):
+        reg = self._reg()
+        reg.register(name="t", schema={"name": "t"}, handler=lambda a, **k: "ok",
+                     check_fn=lambda: True, toolset="ops", emoji="🔧")
+        meta = reg.list_meta()[0]
+        self.assertEqual(meta["name"], "t")
+        self.assertEqual(meta["toolset"], "ops")
+        self.assertEqual(meta["emoji"], "🔧")
+        self.assertEqual(meta["schema"]["name"], "t")
+
+    def test_run_selfheal_marked_write_high_risk(self):
+        """唯一受控写入口必须显式标注 write/high, 管理页与对话过滤依赖此标记."""
+        from hermes.tools.selfheal import tools  # noqa: F401  (注册副作用)
+        meta = {m["name"]: m for m in registry.list_meta()}
+        self.assertIn("run_selfheal", meta)
+        self.assertFalse(meta["run_selfheal"]["read_only"])
+        self.assertEqual(meta["run_selfheal"]["risk"], "high")
+
+
+class RegistryChatToolsTests(unittest.TestCase):
+    """P3 对话「读全开」: 白名单(凭据边界)内只读工具自动全开 + 唯一写入口 selfheal."""
+
+    def test_chat_tools_include_readonly_whitelist_and_selfheal(self):
+        from hermes.tools.selfheal import tools  # noqa: F401  (注册副作用)
+        names = {t["name"] for t in registry.list_chat_tools()}
+        self.assertIn("run_selfheal", names)       # 唯一受控写入口
+        self.assertIn("check_k8s_pods", names)     # 白名单只读观测
+        self.assertIn("scan_log_cleanup", names)
+        self.assertIn("list_servers", names)
+        # bare SSH(任意 host/password) 不在白名单 → 不得进入对话集
+        self.assertNotIn("check_resources", names)
+        self.assertNotIn("list_services", names)
+
+    def test_write_tool_never_exposed_even_if_whitelisted(self):
+        """写工具即使误入白名单(read_only=False)也不得按只读暴露."""
+        from unittest.mock import patch
+
+        reg = ToolRegistry()
+        reg.register(name="write_tool", schema={"name": "write_tool"},
+                     handler=lambda a, **k: "ok", check_fn=lambda: True,
+                     read_only=False, risk="high")
+        with patch("hermes.tools.registry.is_chat_visible", return_value=True):
+            names = [t["name"] for t in reg.list_chat_tools()]
+        self.assertNotIn("write_tool", names)
 
 
 if __name__ == "__main__":

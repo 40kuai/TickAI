@@ -1,7 +1,8 @@
-data/
+/data/
 *.db
 *.sqlite
 .env
+.DS_Store
 __pycache__/
 *.pyc
 .venv/
@@ -11,4 +12,6 @@ node_modules/
 frontend/node_modules/
 frontend/dist/
 static/
-.DS_Store
+docs/
+记录.md
+.pytest_cache/

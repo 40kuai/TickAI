@@ -12,6 +12,7 @@ never start/stop services; the user must do that via the UI.
 from __future__ import annotations
 
 import json
+import time
 
 from hermes.tools.registry import registry, tool_error, tool_result
 from hermes.tools.ssh.resources import check_resources_handler, list_services_handler
@@ -23,20 +24,18 @@ from . import runner as ssh_runner
 RESOURCES_ON_SERVER_SCHEMA = {
     "name": "check_resources_on_server",
     "description": (
-        "Read-only CPU/memory/process inspection of a server in this OpsTicket "
-        "instance. Pass the server_id (an integer, get it from list_servers). "
-        "Never modifies the server. Returns load averages, memory/swap usage, "
-        "top CPU processes, and a pressure_level classification.\n\n"
-        "Use this to diagnose 'why is this server slow?' — look at top_processes "
-        "to identify the resource consumer, then recommend optimization. "
-        "Do NOT restart services from this tool."
+        "只读检查本 OpsTicket 实例中某台服务器的 CPU/内存/进程状况。"
+        "传入 server_id(整数,可从 list_servers 获取)。绝不会修改服务器。"
+        "返回负载均值、内存/Swap 使用、CPU 占用最高的进程及压力等级 pressure_level 分类。\n\n"
+        "用于诊断'为什么这台服务器很慢'——查看 top_processes 找出资源占用者,再给出优化建议。"
+        "请勿通过本工具重启服务。"
     ),
     "parameters": {
         "type": "object",
         "properties": {
             "server_id": {
                 "type": "integer",
-                "description": "Server ID from list_servers. Must be an integer.",
+                "description": "来自 list_servers 的服务器 ID。必须是整数。",
             }
         },
         "required": ["server_id"],
@@ -46,19 +45,17 @@ RESOURCES_ON_SERVER_SCHEMA = {
 SERVICES_ON_SERVER_SCHEMA = {
     "name": "list_services_on_server",
     "description": (
-        "Read-only enumeration of systemd-managed services on a server in this "
-        "OpsTicket instance. Pass the server_id (an integer). Returns each "
-        "service's name, state, sub_state, and is_abnormal flag.\n\n"
-        "Use this to find failed or inactive services. The is_abnormal flag "
-        "marks anything that's not actively running normally. NEVER starts or "
-        "stops services — recommend the user do that via the UI."
+        "只读枚举本 OpsTicket 实例中某台服务器上由 systemd 管理的服务。"
+        "传入 server_id(整数)。返回每个服务的名称、state、sub_state 及 is_abnormal 标记。\n\n"
+        "用于查找失败或未运行的服务。is_abnormal 标记任何非正常运行状态的服务。"
+        "绝不会启动/停止服务——请建议用户通过 UI 操作。"
     ),
     "parameters": {
         "type": "object",
         "properties": {
             "server_id": {
                 "type": "integer",
-                "description": "Server ID from list_servers. Must be an integer.",
+                "description": "来自 list_servers 的服务器 ID。必须是整数。",
             }
         },
         "required": ["server_id"],
@@ -86,7 +83,9 @@ def check_resources_on_server_handler(args: dict, **kwargs) -> str:
         server_pk = server.id
         cred_args = cred.to_connect_args()
 
+    t0 = time.perf_counter()
     result_str = check_resources_handler({"host": host, **cred_args})
+    elapsed_ms = int((time.perf_counter() - t0) * 1000)
 
     # Persist audit (succeeds even if SSH failed — we record the failure)
     try:
@@ -95,6 +94,7 @@ def check_resources_on_server_handler(args: dict, **kwargs) -> str:
             command_label="check_resources",
             result_json=result_str,
             triggered_by="llm_tool_call",
+            duration_ms=elapsed_ms,
             triggered_context={
                 "tool_name": "check_resources_on_server",
                 "server_name": server_name,
@@ -132,7 +132,9 @@ def list_services_on_server_handler(args: dict, **kwargs) -> str:
         server_pk = server.id
         cred_args = cred.to_connect_args()
 
+    t0 = time.perf_counter()
     result_str = list_services_handler({"host": host, **cred_args})
+    elapsed_ms = int((time.perf_counter() - t0) * 1000)
 
     try:
         ssh_runner.persist_tool_run(
@@ -140,6 +142,7 @@ def list_services_on_server_handler(args: dict, **kwargs) -> str:
             command_label="list_services",
             result_json=result_str,
             triggered_by="llm_tool_call",
+            duration_ms=elapsed_ms,
             triggered_context={
                 "tool_name": "list_services_on_server",
                 "server_name": server_name,

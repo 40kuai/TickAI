@@ -11,7 +11,7 @@ Path("/tmp/opsticket_test").mkdir(parents=True, exist_ok=True)
 from hermes.tools.ssh import disk as tools  # noqa: F401, E402
 # audit removed - was hermes.opslib.audit (legacy)
 from hermes.data import db, models  # noqa: E402
-from hermes.data.models import RunRecord, Server  # noqa: E402
+from hermes.data.models import RunRecord, Server, SSHCredential  # noqa: E402
 from hermes.tools.registry import registry  # noqa: E402
 
 
@@ -20,12 +20,17 @@ def _wipe():
     with db.session_scope() as s:
         s.query(RunRecord).delete()
         s.query(Server).delete()
+        s.query(SSHCredential).delete()
 
 
 def _add_server(name="web-01", tags="web,prod", password="secret123"):
     with db.session_scope() as s:
-        s.add(models.Server(name=name, host="10.0.0.1", username="root",
-                            password=password, tags=tags))
+        cred = models.SSHCredential(
+            name=f"{name}-cred", username="root", password=password, is_default=True,
+        )
+        s.add(cred)
+        s.flush()
+        s.add(models.Server(name=name, host="10.0.0.1", ssh_credential_id=cred.id, tags=tags))
     with db.session_scope() as s:
         return s.query(Server).filter_by(name=name).one()
 
@@ -119,8 +124,9 @@ class ListServersToolTests(unittest.TestCase):
         out = registry.dispatch("list_servers", {})
         data = json.loads(out)
         for sv in data["servers"]:
-            self.assertNotEqual(sv["password"], "secret123")
-            self.assertEqual(sv["password"], "***")
+            self.assertNotIn("password", sv)
+            # credentials are referenced by id/name, never inline
+            self.assertIsNotNone(sv.get("ssh_credential_id"))
 
     def test_filters_by_tag(self):
         out = registry.dispatch("list_servers", {"tag": "web"})
@@ -140,7 +146,7 @@ class ListServersToolTests(unittest.TestCase):
 
 class CheckFnTests(unittest.TestCase):
     def test_tools_requirements_satisfied(self):
-        self.assertTrue(tools.check_ops_tools_requirements())
+        self.assertTrue(tools.check_disk_requirements())
 
 
 if __name__ == "__main__":

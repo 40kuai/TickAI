@@ -63,9 +63,60 @@ def _parse_skill(content: str) -> Tuple[Dict[str, Any], str]:
     return meta, m.group("body").strip()
 
 
+def deactivate_others(skill_name: str, keep_version: int) -> int:
+    """Ensure active-version uniqueness: mark every other active version rolled_back.
+
+    写盘生效(approve/rollback)后调用, keep_version 为刚成为线上的版本号。
+    保证同一技能在同一时刻只有一个 active(当前线上)版本。
+    """
+    from sqlalchemy import update
+
+    from hermes.data import db
+    from hermes.data.models import SkillVersion
+
+    with db.session_scope() as s:
+        result = s.execute(
+            update(SkillVersion)
+            .where(
+                SkillVersion.skill_name == skill_name,
+                SkillVersion.status == "active",
+                SkillVersion.version != keep_version,
+            )
+            .values(status="rolled_back")
+        )
+        return result.rowcount or 0
+
+
 def _filename_to_name(path: Path) -> str:
     """Convert a filename like 'detect_oom.md' to skill name 'detect_oom'."""
     return path.stem
+
+
+def validate_skill_content(content: str, expected_name: Optional[str] = None) -> str:
+    """Validate a skill .md content (frontmatter + body). Return "" if valid,
+    otherwise a human-readable error message.
+
+    进化门禁用: LLM 生成内容必须先过此校验(fail-closed)才能落候选/获批写盘。
+    """
+    if not content or not content.strip():
+        return "技能内容为空"
+    m = _FRONTMATTER_RE.match(content)
+    if not m:
+        return "技能内容缺少 YAML frontmatter(须以 --- 开头)"
+    try:
+        meta = yaml.safe_load(m.group("meta")) or {}
+    except yaml.YAMLError as exc:
+        return f"frontmatter YAML 解析失败: {exc}"
+    if not isinstance(meta, dict):
+        return "frontmatter 必须是 YAML 映射"
+    name = meta.get("name")
+    if not name or not str(name).strip():
+        return "frontmatter 缺少 name 字段"
+    if expected_name and str(name).strip() != expected_name:
+        return f"frontmatter name 为 {name!r}, 与技能 {expected_name!r} 不一致"
+    if not m.group("body").strip():
+        return "技能正文(body)为空"
+    return ""
 
 
 # ============================================================
@@ -155,8 +206,12 @@ def save_skill(
     content: str,
     skills_dir: str | Path = SKILLS_DIR,
     reason: str = "manual",
+    record_version: bool = True,
 ) -> str:
-    """Save a skill to disk and create a SkillVersion entry.
+    """Save a skill to disk and (optionally) create a SkillVersion entry.
+
+    record_version=False 用于「候选批准写盘」: 内容落盘但不再新增版本记录,
+    候选记录本身流转为 active(线上), 避免同一次进化产生双记录/版本跳号。
 
     Returns the file path written. The filename is derived from the
     frontmatter `name` field (or the provided `name` as fallback).
@@ -182,14 +237,20 @@ def save_skill(
 
     path.write_text(content, encoding="utf-8")
 
-    # Record version
-    _record_skill_version(name, content, diff, reason)
+    # Record version (active 唯一: 新版本成为线上, 旧 active 自动转 rolled_back)
+    if record_version:
+        new_version = _record_skill_version(name, content, diff, reason)
+        if new_version is not None:
+            deactivate_others(name, keep_version=new_version)
 
     return str(path)
 
 
-def _record_skill_version(name: str, content: str, diff: str, reason: str) -> None:
-    """Persist a SkillVersion entry for the just-saved skill."""
+def _record_skill_version(name: str, content: str, diff: str, reason: str) -> Optional[int]:
+    """Persist a SkillVersion entry for the just-saved skill.
+
+    Returns the new version number (None on DB failure).
+    """
     try:
         with session_scope() as s:
             # Determine next version number
@@ -198,14 +259,16 @@ def _record_skill_version(name: str, content: str, diff: str, reason: str) -> No
                 select(func.max(SkillVersion.version))
                 .where(SkillVersion.skill_name == name)
             ).scalar() or 0
+            new_version = int(max_v) + 1
             s.add(SkillVersion(
                 skill_name=name,
-                version=int(max_v) + 1,
+                version=new_version,
                 content=content,
                 diff=diff,
                 reason=reason,
                 created_at=datetime.utcnow(),
             ))
+            return new_version
     except Exception:
         # Don't block saves on DB errors
-        pass
+        return None

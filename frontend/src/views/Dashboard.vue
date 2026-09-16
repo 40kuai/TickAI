@@ -16,6 +16,7 @@ const stats = ref({
 const runs = ref([])
 const loading = ref(false)
 const errorMsg = ref('')
+const selfheal = ref({ success_rate: 0, pending: 0 })
 
 // 计算成功率
 function calcRate(total, success) {
@@ -39,8 +40,19 @@ function statusBadge(status) {
   const s = String(status || '').toLowerCase()
   if (s === 'success' || s === 'succeeded') return 'badge-success'
   if (s === 'running' || s === 'pending') return 'badge-info'
-  if (s === 'failed' || s === 'error') return 'badge-danger'
+  if (s === 'failed' || s === 'error' || s === 'ssh_error') return 'badge-danger'
   return 'badge-gray'
+}
+
+// 类型标签
+const TYPE_LABELS = {
+  run: '服务器操作',
+  skill: 'Skill 巡检',
+  conversation: 'AI 对话',
+}
+
+function typeLabel(t) {
+  return TYPE_LABELS[t] || t || '-'
 }
 
 // 统计数字卡片
@@ -64,7 +76,7 @@ async function loadData() {
       ['success', 'succeeded'].includes(String(r.status || '').toLowerCase())
     ).length
     const failed = list.filter((r) =>
-      ['failed', 'error'].includes(String(r.status || '').toLowerCase())
+      ['failed', 'error', 'ssh_error'].includes(String(r.status || '').toLowerCase())
     ).length
     stats.value = {
       total,
@@ -80,7 +92,24 @@ async function loadData() {
   }
 }
 
-onMounted(loadData)
+// 加载自愈统计（成功率 + 待审批）
+async function loadSelfhealStats() {
+  try {
+    const res = await api.get('/selfheal/stats')
+    const d = res.data || {}
+    selfheal.value = {
+      success_rate: d.success_rate ?? 0,
+      pending: d.pending ?? 0
+    }
+  } catch {
+    /* 自愈统计加载失败时保持默认值 */
+  }
+}
+
+onMounted(() => {
+  loadData()
+  loadSelfhealStats()
+})
 </script>
 
 <template>
@@ -111,6 +140,22 @@ onMounted(loadData)
           <div class="stat-label">{{ card.label }}</div>
         </div>
       </div>
+
+      <!-- 自愈统计卡片 -->
+      <div class="stat-card tone-info">
+        <div class="stat-icon">✚</div>
+        <div class="stat-body">
+          <div class="stat-value">{{ selfheal.success_rate }}%</div>
+          <div class="stat-label">自愈成功率</div>
+        </div>
+      </div>
+      <div class="stat-card tone-warning">
+        <div class="stat-icon">⚠</div>
+        <div class="stat-body">
+          <div class="stat-value">{{ selfheal.pending }}</div>
+          <div class="stat-label">自愈待审批</div>
+        </div>
+      </div>
     </div>
 
     <!-- 最近运行记录 -->
@@ -131,19 +176,19 @@ onMounted(loadData)
           <thead>
             <tr>
               <th>时间</th>
-              <th>服务器</th>
+              <th>类型</th>
+              <th>名称</th>
               <th>状态</th>
-              <th>运行内容</th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="(r, i) in runs" :key="r.id ?? i">
-              <td>{{ formatTime(r.started_at) }}</td>
-              <td>{{ r.server_name || '-' }}</td>
+            <tr v-for="(r, i) in runs" :key="r.type + '-' + r.id">
+              <td>{{ formatTime(r.time) }}</td>
+              <td>{{ typeLabel(r.type) }}</td>
+              <td class="col-content">{{ r.title || '-' }}</td>
               <td>
                 <span class="badge" :class="statusBadge(r.status)">{{ r.status || '-' }}</span>
               </td>
-              <td class="col-content">{{ r.command || '-' }}</td>
             </tr>
           </tbody>
         </table>
@@ -230,6 +275,7 @@ onMounted(loadData)
 .tone-success .stat-icon { background: rgba(16, 185, 129, 0.12); color: var(--color-success); }
 .tone-danger .stat-icon { background: rgba(239, 68, 68, 0.12); color: var(--color-danger); }
 .tone-info .stat-icon { background: rgba(59, 130, 246, 0.12); color: var(--color-info); }
+.tone-warning .stat-icon { background: rgba(245, 158, 11, 0.12); color: var(--color-warning); }
 .stat-value {
   font-size: 24px;
   font-weight: 700;

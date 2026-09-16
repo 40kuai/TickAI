@@ -140,7 +140,8 @@ class SchemaTests(unittest.TestCase):
 
     def test_check_k8s_nodes_description_mentions_readonly(self):
         schema = next(s for s in registry.list_schemas() if s["name"] == "check_k8s_nodes")
-        self.assertIn("read-only", schema["description"].lower())
+        # The description is in Chinese and asserts read-only intent
+        self.assertIn("只读", schema["description"])
 
     def test_all_schemas_require_context_or_have_default(self):
         # All check_* tools take a context (optional in our design)

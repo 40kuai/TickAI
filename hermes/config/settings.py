@@ -13,7 +13,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # Locate the .env file at project root (parent of hermes/)
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent  # /Users/40kuai/Documents/ai/
 _ENV_FILE = _PROJECT_ROOT / ".env"
 
 
@@ -124,3 +124,28 @@ def LDAP_USE_SSL() -> bool:
 def LDAP_CONFIGURED() -> bool:
     """检查 LDAP 是否已配置"""
     return bool(LDAP_SERVER() and LDAP_BIND_DN())
+
+
+# 飞书 — 运行时读取
+def FEISHU_APP_ID() -> str:
+    return get("FEISHU_APP_ID", "")
+
+
+def FEISHU_APP_SECRET() -> str:
+    return get("FEISHU_APP_SECRET", "")
+
+
+def FEISHU_OPENID_WHITELIST() -> list:
+    raw = get("FEISHU_OPENID_WHITELIST", "")
+    return [x.strip() for x in raw.split(",") if x.strip()]
+
+
+def FEISHU_ENABLED() -> bool:
+    """检查飞书是否已配置"""
+    return bool(FEISHU_APP_ID() and FEISHU_APP_SECRET())
+
+
+# Cookie — Secure 标志（生产 HTTPS 必须开启）
+def COOKIE_SECURE() -> bool:
+    """会话 Cookie 是否带 Secure 标志。生产环境(HTTPS)应设为 true。"""
+    return get("COOKIE_SECURE", "false").lower() in ("1", "true", "yes")

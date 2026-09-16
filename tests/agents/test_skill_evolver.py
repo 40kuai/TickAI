@@ -85,13 +85,13 @@ class SkillEvolverUnitTests(unittest.TestCase):
 
     def test_evolver_produces_new_content(self):
         evolver = SkillEvolver(llm_client=self.mock_llm, skills_dir=self.tmpdir)
-        new_content = evolver.evolve("evolve_me")
+        new_content = evolver.evolve_skill("evolve_me")
         self.assertIn("Improved", new_content)
         self.assertIn("check_k8s_events", new_content)
 
     def test_evolver_passes_history_to_llm(self):
         evolver = SkillEvolver(llm_client=self.mock_llm, skills_dir=self.tmpdir)
-        evolver.evolve("evolve_me")
+        evolver.evolve_skill("evolve_me")
         # LLM was called
         self.mock_llm.chat.assert_called()
         # Check messages contain the outcomes
@@ -101,16 +101,63 @@ class SkillEvolverUnitTests(unittest.TestCase):
         self.assertIn("accepted", user_msg["content"])
         self.assertIn("rejected", user_msg["content"])
 
+    def test_save_with_record_keeps_active_unique(self):
+        """save_skill(record_version=True) 插入新 active 时旧 active 必须转 rolled_back."""
+        from hermes.skills.loader import save_skill as save
+
+        new_skill = "---\nname: evolve_me\ndescription: newer\n---\n\n# v2\n"
+        save("evolve_me", new_skill, skills_dir=self.tmpdir)
+        with db.session_scope() as s:
+            actives = s.query(SkillVersion).filter_by(
+                skill_name="evolve_me", status="active").all()
+            self.assertEqual(len(actives), 1)
+            self.assertEqual(actives[0].content, new_skill)
+
+    def test_gather_outcomes_filters_unrated(self):
+        """未标注(accepted/rejected)的反馈不应作为进化信号, 避免 'None' 污染 prompt."""
+        with db.session_scope() as s:
+            s.add(SkillOutcome(
+                skill_name="evolve_me", cluster_context="prod",
+                triggered_by="user", run_at=datetime.utcnow(),
+                findings_json="{}", findings_summary="rated",
+                user_decision="accepted", decision_at=datetime.utcnow()))
+            s.add(SkillOutcome(
+                skill_name="evolve_me", cluster_context="prod",
+                triggered_by="user", run_at=datetime.utcnow(),
+                findings_json="{}", findings_summary="unrated",
+                user_decision=None))
+        evolver = SkillEvolver(llm_client=self.mock_llm, skills_dir=self.tmpdir)
+        outcomes = evolver._gather_outcomes("evolve_me")
+        self.assertTrue(outcomes)
+        self.assertTrue(
+            all(o["user_decision"] in ("accepted", "rejected") for o in outcomes))
+
+    def test_gather_outcomes_truncates_notes(self):
+        """超长决策备注/摘要必须截断, 防止 prompt 超长导致 LLM 生成失败."""
+        with db.session_scope() as s:
+            s.add(SkillOutcome(
+                skill_name="evolve_me", cluster_context="prod",
+                triggered_by="user", run_at=datetime.utcnow(),
+                findings_json="{}",
+                findings_summary="f" * 500,
+                user_decision="rejected", decision_at=datetime.utcnow(),
+                decision_notes="x" * 500,
+            ))
+        evolver = SkillEvolver(llm_client=self.mock_llm, skills_dir=self.tmpdir)
+        for o in evolver._gather_outcomes("evolve_me"):
+            self.assertLessEqual(len(o["decision_notes"]), 300)
+            self.assertLessEqual(len(o["findings_summary"]), 300)
+
     def test_evolver_saves_new_content(self):
         evolver = SkillEvolver(llm_client=self.mock_llm, skills_dir=self.tmpdir)
-        evolver.evolve("evolve_me", save=True)
+        evolver.evolve_skill("evolve_me", save=True)
         # File should be updated
         updated = (Path(self.tmpdir) / "evolve_me.md").read_text()
         self.assertIn("Improved", updated)
 
     def test_evolver_records_version(self):
         evolver = SkillEvolver(llm_client=self.mock_llm, skills_dir=self.tmpdir)
-        evolver.evolve("evolve_me", save=True)
+        evolver.evolve_skill("evolve_me", save=True)
         with db.session_scope() as s:
             versions = s.query(SkillVersion).filter_by(skill_name="evolve_me").all()
             # At least 2: initial + evolved
@@ -119,16 +166,21 @@ class SkillEvolverUnitTests(unittest.TestCase):
             self.assertEqual(latest.reason, "auto_evolve")
             self.assertIn("Improved", latest.content)
 
+    def test_default_language_is_chinese(self):
+        """进化输出默认中文(与 skill_runner 一致), 防止升级后技能变英文."""
+        evolver = SkillEvolver(llm_client=MagicMock())
+        self.assertEqual(evolver.language, "zh")
+
     def test_evolver_skill_not_found(self):
         evolver = SkillEvolver(llm_client=self.mock_llm, skills_dir=self.tmpdir)
         with self.assertRaises(EvolutionError):
-            evolver.evolve("nonexistent_skill")
+            evolver.evolve_skill("nonexistent_skill")
 
     def test_evolver_handles_llm_error(self):
         self.mock_llm.chat.side_effect = RuntimeError("LLM down")
         evolver = SkillEvolver(llm_client=self.mock_llm, skills_dir=self.tmpdir)
         with self.assertRaises(EvolutionError):
-            evolver.evolve("evolve_me")
+            evolver.evolve_skill("evolve_me")
 
     def test_evolver_with_no_history_returns_original(self):
         # Make a new skill with no outcomes
@@ -136,7 +188,7 @@ class SkillEvolverUnitTests(unittest.TestCase):
                    skills_dir=self.tmpdir)
         evolver = SkillEvolver(llm_client=self.mock_llm, skills_dir=self.tmpdir)
         # With no feedback, evolver should still consult LLM but may return same
-        new_content = evolver.evolve("fresh")
+        new_content = evolver.evolve_skill("fresh")
         # The mock LLM will return its canned response
         self.assertIsInstance(new_content, str)
         self.assertGreater(len(new_content), 0)
@@ -158,7 +210,7 @@ class SkillEvolverUnitTests(unittest.TestCase):
             }]
         }
         evolver = SkillEvolver(llm_client=self.mock_llm, skills_dir=self.tmpdir)
-        new_content = evolver.evolve("evolve_me")
+        new_content = evolver.evolve_skill("evolve_me")
         self.assertIn("name: evolve_me", new_content)
         self.assertIn("Better instructions", new_content)
 

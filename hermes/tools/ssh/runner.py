@@ -116,10 +116,10 @@ def persist_tool_run(
     `command_label` is a short identifier (e.g. "check_resources", "list_services")
     that shows up in the History page — NOT an actual shell command.
 
-    `duration_ms`: actual execution duration measured by the caller. If omitted,
-    falls back to the (near-zero) time taken by this function's own bookkeeping,
-    which is not meaningful — callers that measure real execution time should
-    always pass this value.
+    `duration_ms`: real execution time of the tool handler, measured by the
+    caller around registry.dispatch(). The actual work happens BEFORE this
+    function is called, so the caller must pass it; otherwise the internal
+    self-measurement is ~0ms and the History page shows a wrong duration.
     """
     started_at = datetime.utcnow()
     result = json.loads(result_json)
@@ -162,7 +162,7 @@ def persist_tool_run(
         )
         session.add(run)
 
-        if status == "success":
+        if status == "success" and server_id is not None:
             server = session.get(Server, server_id)
             if server is not None:
                 server.last_seen_at = finished_at

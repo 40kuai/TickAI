@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel
 
 from hermes.auth import authenticate, create_session
+from hermes.config import settings
 from hermes.data.db import session_scope
 from hermes.data.models import User, UserSession
 
@@ -54,6 +55,7 @@ def login(req: LoginRequest, response: Response):
         httponly=True,
         samesite="lax",
         path="/",
+        secure=settings.COOKIE_SECURE(),
     )
 
     return user.to_dict()

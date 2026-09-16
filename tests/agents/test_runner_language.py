@@ -62,7 +62,7 @@ class SkillRunnerLanguageTests(unittest.TestCase):
 
     def _get_system_prompt(self, **run_kwargs):
         runner = SkillRunner(llm_client=self.mock_llm, skills_dir=self.tmpdir)
-        runner.run("test_skill", **run_kwargs)
+        runner.execute_skill("test_skill", **run_kwargs)
         call = self.mock_llm.chat.call_args
         messages = call.kwargs.get("messages") or call[1].get("messages")
         return next(m["content"] for m in messages if m.get("role") == "system")

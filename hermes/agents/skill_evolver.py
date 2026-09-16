@@ -31,6 +31,7 @@ from hermes.agents.skill_runner import LANGUAGE_DIRECTIVES, _resolve_language
 from hermes.skills.loader import (
     load_skill,
     save_skill,
+    validate_skill_content,
     SKILLS_DIR,
 )
 
@@ -50,7 +51,7 @@ class SkillEvolver(BaseAgent):
         llm_client: Any,
         skills_dir: str | Path = SKILLS_DIR,
         max_outcomes: int = 20,
-        language: str = "en",
+        language: str = "zh",
     ):
         self.llm = llm_client
         self.skills_dir = Path(skills_dir)
@@ -71,9 +72,11 @@ class SkillEvolver(BaseAgent):
         context.append_history(self.name, f"skill {skill_name} evolved")
         return context
 
-    def evolve_skill(self, skill_name: str, save: bool = False) -> str:
+    def evolve_skill(self, skill_name: str, save: bool = False,
+                     max_tokens: Optional[int] = None) -> str:
         """Return the new (improved) skill content. Optionally save it.
 
+        max_tokens: 限制 LLM 输出长度(长技能生成必传, 防超时)。
         Does NOT save by default — caller decides whether to apply the change.
         """
         # 1. Load current skill
@@ -95,6 +98,7 @@ class SkillEvolver(BaseAgent):
                     {"role": "system", "content": self._system_prompt()},
                     {"role": "user", "content": prompt},
                 ],
+                max_tokens=max_tokens,
             )
         except Exception as exc:  # noqa: BLE001
             raise EvolutionError(f"LLM call failed: {exc}") from exc
@@ -122,7 +126,11 @@ class SkillEvolver(BaseAgent):
         with db.session_scope() as s:
             rows = s.execute(
                 select(SkillOutcome)
-                .where(SkillOutcome.skill_name == skill_name)
+                .where(
+                    SkillOutcome.skill_name == skill_name,
+                    # 只取用户明确标注的反馈作为进化信号, 未标注的执行记录不参与
+                    SkillOutcome.user_decision.in_(["accepted", "rejected"]),
+                )
                 .order_by(SkillOutcome.run_at.desc())
                 .limit(self.max_outcomes)
             ).scalars().all()
@@ -130,8 +138,9 @@ class SkillEvolver(BaseAgent):
                 {
                     "run_at": r.run_at.isoformat() if r.run_at else None,
                     "user_decision": r.user_decision,
-                    "decision_notes": r.decision_notes,
-                    "outcome_effect": r.outcome_effect,
+                    # 截断长文本, 防止 20 条反馈把 prompt 撑爆导致 LLM 生成失败
+                    "decision_notes": (r.decision_notes or "")[:300],
+                    "outcome_effect": (r.outcome_effect or "")[:300],
                     "findings_summary": r.findings_summary[:300],
                 }
                 for r in rows
@@ -144,6 +153,13 @@ class SkillEvolver(BaseAgent):
             "and a body of instructions for an LLM to follow.\n\n"
             "Your job: given the current skill and recent user feedback, produce an IMPROVED version "
             "that addresses the feedback while keeping the same name and read-only safety guarantees.\n\n"
+            "IMPORTANT principles:\n"
+            "- Make MINIMAL, targeted changes based on the feedback. Preserve the existing content, "
+            "structure, tool names, and wording as much as possible — do NOT rewrite the whole skill "
+            "or introduce content unrelated to the feedback.\n"
+            "- Keep the SAME LANGUAGE as the current skill content. If the current skill is written "
+            "in Chinese, the output must stay Chinese; do not translate it into English.\n"
+            "- Keep the frontmatter fields exactly as-is except for genuine, feedback-driven improvements.\n\n"
             "Output format: return ONLY the complete new skill content (frontmatter + body). "
             "Do not include explanations, code fences, or any other text.\n\n"
             f"{LANGUAGE_DIRECTIVES[self.language]}"
@@ -165,6 +181,7 @@ class SkillEvolver(BaseAgent):
                 parts.append(
                     f"### Outcome #{i} — {o['user_decision']}\n"
                     f"Findings: {o['findings_summary']}\n"
+                    f"Effect: {o['outcome_effect'] or '(none)'}\n"
                     f"Notes: {o['decision_notes'] or '(none)'}\n"
                 )
         else:
@@ -205,6 +222,11 @@ class SkillEvolver(BaseAgent):
             if fm_match:
                 text = text[fm_match.start():].strip()
 
+        # fail-closed: LLM 残片(无 frontmatter / 空正文)必须当场拒绝, 不能落候选/写盘
+        invalid = validate_skill_content(text)
+        if invalid:
+            raise EvolutionError(f"LLM 输出内容无效: {invalid}")
+
         return text
 
 
@@ -215,7 +237,7 @@ class SkillEvolver(BaseAgent):
 _default_evolver: Optional[SkillEvolver] = None
 
 
-def evolve_skill(skill_name: str, save: bool = False) -> str:
+def evolve_skill(skill_name: str, save: bool = False, max_tokens: Optional[int] = None) -> str:
     """Evolve a skill using a default-constructed evolver (real LLM client)."""
     global _default_evolver
     if _default_evolver is None:
@@ -225,6 +247,9 @@ def evolve_skill(skill_name: str, save: bool = False) -> str:
             api_key=LLM_API_KEY(),
             model=LLM_MODEL(),
             base_url=LLM_BASE_URL(),
+            # 技能生成输出长: 放宽单次超时、减少重试(避免 60s*3 累计 3 分钟才报错)
+            timeout=120.0,
+            max_retries=1,
         )
         _default_evolver = SkillEvolver(llm_client=client)
-    return _default_evolver.evolve_skill(skill_name, save=save)
+    return _default_evolver.evolve_skill(skill_name, save=save, max_tokens=max_tokens)

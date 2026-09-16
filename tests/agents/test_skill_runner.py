@@ -63,7 +63,9 @@ class SkillRunnerUnitTests(unittest.TestCase):
 
     def test_run_skill_persists_outcome(self):
         runner = SkillRunner(llm_client=self.mock_llm, skills_dir=self.tmpdir)
-        outcome_id = runner.run("test_skill", cluster_context="prod", triggered_by="user")
+        outcome_id = runner.execute_skill(
+            "test_skill", cluster_context="prod", triggered_by="user"
+        )
         self.assertIsInstance(outcome_id, int)
 
         with db.session_scope() as s:
@@ -76,7 +78,7 @@ class SkillRunnerUnitTests(unittest.TestCase):
 
     def test_run_skill_captures_findings(self):
         runner = SkillRunner(llm_client=self.mock_llm, skills_dir=self.tmpdir)
-        outcome_id = runner.run("test_skill")
+        outcome_id = runner.execute_skill("test_skill")
 
         with db.session_scope() as s:
             outcome = s.get(SkillOutcome, outcome_id)
@@ -85,7 +87,7 @@ class SkillRunnerUnitTests(unittest.TestCase):
 
     def test_run_skill_passes_skill_body_to_llm(self):
         runner = SkillRunner(llm_client=self.mock_llm, skills_dir=self.tmpdir)
-        runner.run("test_skill")
+        runner.execute_skill("test_skill")
         # The LLM was called at least once
         self.mock_llm.chat.assert_called()
         # Inspect the messages sent to the LLM
@@ -98,7 +100,7 @@ class SkillRunnerUnitTests(unittest.TestCase):
 
     def test_run_skill_includes_k8s_tools(self):
         runner = SkillRunner(llm_client=self.mock_llm, skills_dir=self.tmpdir)
-        runner.run("test_skill")
+        runner.execute_skill("test_skill")
         call_args = self.mock_llm.chat.call_args
         tools = call_args.kwargs.get("tools") or call_args[1].get("tools")
         tool_names = {t["function"]["name"] for t in tools}
@@ -109,13 +111,13 @@ class SkillRunnerUnitTests(unittest.TestCase):
     def test_run_skill_skill_not_found(self):
         runner = SkillRunner(llm_client=self.mock_llm, skills_dir=self.tmpdir)
         with self.assertRaises(SkillExecutionError):
-            runner.run("nonexistent_skill")
+            runner.execute_skill("nonexistent_skill")
 
     def test_run_skill_handles_llm_error(self):
         self.mock_llm.chat.side_effect = RuntimeError("LLM unavailable")
         runner = SkillRunner(llm_client=self.mock_llm, skills_dir=self.tmpdir)
         with self.assertRaises(SkillExecutionError):
-            runner.run("test_skill")
+            runner.execute_skill("test_skill")
 
     def test_run_skill_executes_tool_calls_then_final(self):
         """LLM first returns a tool_call, then a final text answer."""
@@ -153,7 +155,7 @@ class SkillRunnerUnitTests(unittest.TestCase):
                  "parameters": {"type": "object", "properties": {}}}
             ]
             runner = SkillRunner(llm_client=self.mock_llm, skills_dir=self.tmpdir)
-            outcome_id = runner.run("test_skill")
+            outcome_id = runner.execute_skill("test_skill")
         # Tool was called
         mock_reg.dispatch.assert_called_with("check_k8s_nodes", {"context": "prod"})
         # Outcome captured final answer
@@ -185,9 +187,9 @@ class SkillRunnerUnitTests(unittest.TestCase):
                 skills_dir=self.tmpdir,
                 max_tool_rounds=3,
             )
-            outcome_id = runner.run("test_skill")
-        # 3 calls to LLM (max rounds reached)
-        self.assertEqual(self.mock_llm.chat.call_count, 3)
+            outcome_id = runner.execute_skill("test_skill")
+        # 3 rounds of tool calls + 1 forced final-summary call
+        self.assertEqual(self.mock_llm.chat.call_count, 4)
         with db.session_scope() as s:
             outcome = s.get(SkillOutcome, outcome_id)
             self.assertIn("max tool rounds", outcome.findings_summary.lower())
