@@ -1,8 +1,8 @@
 ---
-name: analyze_log_cleanup
-description: 基于 scan_log_cleanup 的只读清单，AI 分析并产出结构化日志清理策略（每项映射到预定义清理类型，经统一审批出口判定：低危直执 / 高危挂审批单）
-trigger: manual
-severity: warning
+name: "analyze_log_cleanup"
+description: "基于 scan_log_cleanup 的只读清单，AI 分析并产出结构化日志清理策略（每项映射到预定义清理类型，经统一审批出口判定：低危直执 / 高危挂审批单）"
+trigger: "manual"
+severity: "warning"
 ---
 
 # 日志清理策略分析
@@ -11,7 +11,7 @@ severity: warning
 
 ## 任务
 
-1. 识别磁盘压力来源（磁盘使用率 ≥80% 的挂载点、超大日志文件、停止容器、dangling 镜像）。
+1. 严格基于 `scan_log_cleanup` 清单识别磁盘压力来源（磁盘使用率 ≥80% 的挂载点、超大日志文件、停止容器、dangling 镜像）。
 2. 产出**结构化清理策略 JSON**，每个清理项必须是以下**预定义类型**之一：
 
 | 类型 | 用途 | 参数 |
@@ -23,7 +23,7 @@ severity: warning
 
 ## 输出格式
 
-只输出 JSON，不要任何额外文字：
+只输出 JSON，不要任何额外文字（包括 Markdown 代码块、解释性摘要、集群/节点分析）：
 
 ```json
 {
@@ -41,3 +41,5 @@ severity: warning
 - 优先大文件/高收益项；容量单位统一换算为 MB 时的整数或原样路径。
 - 该策略不会直接放行——每条经统一审批出口判定：影响面小且低危的项可能自动执行（auto），
   影响面大或高危的项会生成审批单，人工批准后才执行（approval），规则硬约束禁止的项直接拒绝（reject）。
+- 严格只读：禁止执行或模拟任何实时集群/节点/磁盘探测（如 kubectl、连接检查、内存/磁盘状态查询），
+  禁止输出与清理策略无关的内容；唯一数据来源是输入的 `scan_log_cleanup` 清单。
